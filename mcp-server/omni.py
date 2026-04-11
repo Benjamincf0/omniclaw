@@ -7,17 +7,17 @@ from models.news import get_news as fetch_news
 from omnivox_client import omnivox_request
 
 # Anyone connecting must send: Authorization: Bearer my-secret-token
-auth = StaticTokenVerifier(
-    tokens={
-        os.environ["MCP_TOKEN"]: {
-            "client_id": "trusted-client",
-            "scopes": ["read", "write"],
-        }
-    }
-)
+# auth = StaticTokenVerifier(
+#     tokens={
+#         os.environ["MCP_TOKEN"]: {
+#             "client_id": "trusted-client",
+#             "scopes": ["read", "write"],
+#         }
+#     }
+# )
 
 # Initialize FastMCP server
-mcp = FastMCP("omniclaw", auth=auth)
+mcp = FastMCP("omniclaw")
 
 # Constants
 host = os.environ.get("MCP_HOST") or "localhost"
@@ -61,7 +61,7 @@ async def get_news_item(link: str) -> NewsRes:
 
 def main():
     # run the server
-    mcp.run(transport="http", host="localhost", port=8000)
+    mcp.run(transport="http", host=host, port=8000)
 
 
 if __name__ == "__main__":
