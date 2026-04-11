@@ -1,8 +1,10 @@
 import os
-from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+
+from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
+from models.news import get_news as fetch_news
+from omnivox_client import omnivox_request
 
 from google import genai
 from google.genai import types
@@ -15,37 +17,56 @@ from dotenv import load_dotenv
 # Load environment variables 
 load_dotenv()
 # Anyone connecting must send: Authorization: Bearer my-secret-token
-auth = StaticTokenVerifier(
-    tokens={
-        os.environ["MCP_TOKEN"]: {
-            "client_id": "trusted-client",
-            "scopes": ["read", "write"],
-        }
-    }
-)
+# auth = StaticTokenVerifier(
+#     tokens={
+#         os.environ["MCP_TOKEN"]: {
+#             "client_id": "trusted-client",
+#             "scopes": ["read", "write"],
+#         }
+#     }
+# )
 
 # Initialize FastMCP server
-mcp = FastMCP("weather", auth=auth)
+mcp = FastMCP("omniclaw")
 
 # Constants
+host = os.environ.get("MCP_HOST") or "localhost"
 
 
 @mcp.tool()
 async def get_mio(num: int) -> str:
-    """get an MIO for a student's omnivox"""
-    return f"\n---\nHELLO WORLD FROM get_mio({num}) heheheh\n---\n"
+    """Get MIOs (internal messages) for a student's Omnivox."""
+    # TODO: replace path with actual Omnivox MIO endpoint once known
+    resp = await omnivox_request("/intr/Module/MessagerieEleve/Default.aspx")
+    return resp.text
 
 
 @mcp.tool()
 async def send_mio(subject: str, message: str) -> str:
-    """get an MIO for a student's omnivox"""
-    return f"\n---\nHELLO WORLD FROM get_subject(subject:{subject}, message:{message}) heheheh\n---\n"
+    """Send an MIO through a student's Omnivox."""
+    # TODO: replace with actual Omnivox send endpoint + proper form fields
+    resp = await omnivox_request(
+        "/intr/Module/MessagerieEleve/Envoyer.aspx",
+        method="POST",
+        data={"subject": subject, "message": message},
+    )
+    return resp.text
 
 
 @mcp.tool()
-async def get_news(num: int) -> str:
+async def get_news(num: int = 10) -> AllNewsRes:
     """get the latest student news"""
-    return f"\n---\nHELLO WORLD FROM get_news({num}) heheheh\n---\n"
+    if num < 1:
+        raise ValueError("num must be at least 1")
+
+    news = await get_all_news(AllNewsReq())
+    return AllNewsRes(news_links=news.news_links[:num])
+
+
+@mcp.tool()
+async def get_news_item(link: str) -> NewsRes:
+    """get the contents of a single student news post"""
+    return await fetch_news(NewsReq(link=link))
 
 
 
@@ -148,6 +169,7 @@ def main():
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False) # run FastAPI server for the frontend to connect to
 
 
+    # mcp.run(transport="http", host=host, port=8000)
 
 
 if __name__ == "__main__":
