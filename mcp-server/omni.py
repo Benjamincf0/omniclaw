@@ -1,6 +1,7 @@
 import os
 from fastmcp import FastMCP
 from omnivox_client import omnivox_request
+from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news, get_news as fetch_news
 
 mcp = FastMCP("omniclaw")
 
