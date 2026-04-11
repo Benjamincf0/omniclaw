@@ -77,6 +77,64 @@ async def get_news_item(link: str) -> NewsRes:
 
 # ── Gemini setup ──────────────────────────────────────────────────────────────
 
+TOOL_HANDLERS = {
+    "get_mio": get_mio,
+    "send_mio": send_mio,
+    "get_news": get_news,
+    "get_news_item": get_news_item,
+}
+
+GEMINI_TOOLS = [
+    types.Tool(
+        function_declarations=[
+            types.FunctionDeclaration(
+                name="get_mio",
+                description="Get MIOs (internal messages) for a student's Omnivox.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "num": types.Schema(type=types.Type.INTEGER, description="How many MIO messages to fetch."),
+                    },
+                    required=["num"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="send_mio",
+                description="Send an MIO through a student's Omnivox.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "subject": types.Schema(type=types.Type.STRING, description="Message subject."),
+                        "message": types.Schema(type=types.Type.STRING, description="Message body."),
+                    },
+                    required=["subject", "message"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_news",
+                description="Get the latest student news links from John Abbott College.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "num": types.Schema(type=types.Type.INTEGER, description="How many news items to fetch (default 10)."),
+                    },
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_news_item",
+                description="Get the full contents of a single news post by its link.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "link": types.Schema(type=types.Type.STRING, description="The news post URL."),
+                    },
+                    required=["link"],
+                ),
+            ),
+        ]
+    )
+]
+
 gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 SYSTEM_PROMPT = (
@@ -105,27 +163,59 @@ def _build_contents(message: str, history: list[dict]) -> list[types.Content]:
     return contents
 
 
-async def run_chat(message: str, history: list[dict]) -> str:
-    """Send message to Gemini and return the text response."""
-    contents = _build_contents(message, history)
-
+async def _generate(contents: list) -> types.GenerateContentResponse:
+    """Call Gemini with exponential backoff on rate limit errors."""
     for attempt in range(3):
         try:
-            response = await gemini_client.aio.models.generate_content(
+            return await gemini_client.aio.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_PROMPT,
-                    tools=[],
+                    tools=GEMINI_TOOLS,
                 ),
             )
-            return "\n".join(p.text for p in response.candidates[0].content.parts if p.text)
         except Exception as e:
-            # Attempts up to 3 times with exponential backoff (1s, 2s) before re-raising other exceptions, improving robustness against rate limiting/resource exhaustion.
             if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) and attempt < 2:
                 await asyncio.sleep(2 ** attempt)  # 1s, 2s
                 continue
             raise
+
+
+async def run_chat(message: str, history: list[dict]) -> str:
+    """Agentic loop: call Gemini, execute any tool calls, repeat until final text."""
+    contents = _build_contents(message, history)
+
+    while True:
+        response = await _generate(contents)
+        candidate = response.candidates[0].content
+        function_calls = [p for p in candidate.parts if p.function_call]
+
+        # No tool calls — Gemini is done
+        if not function_calls:
+            return "\n".join(p.text for p in candidate.parts if p.text)
+
+        # Append Gemini's response (with tool calls) to the conversation
+        contents.append(candidate)
+
+        # Execute each tool and collect results
+        tool_results: list[types.Part] = []
+        for part in function_calls:
+            fc = part.function_call
+            handler = TOOL_HANDLERS.get(fc.name)
+            if handler:
+                result = await handler(**dict(fc.args))
+                # Pydantic models need serialisation; strings pass through fine
+                if hasattr(result, "model_dump"):
+                    result = result.model_dump()
+            else:
+                result = f"Unknown tool: {fc.name}"
+
+            tool_results.append(
+                types.Part.from_function_response(name=fc.name, response={"result": result})
+            )
+
+        contents.append(types.Content(role="user", parts=tool_results))
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
