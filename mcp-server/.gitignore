@@ -11,3 +11,5 @@ wheels/
 
 # Auth credentials
 auth.txt
+
+.env
