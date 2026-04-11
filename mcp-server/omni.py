@@ -2,6 +2,8 @@ import os
 
 from fastmcp import FastMCP
 
+from models.mio import AllMiosReq, AllMiosRes, MioReq, MioRes, get_all_mios
+from models.mio import get_mio as fetch_mio
 from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
 from models.news import get_news as fetch_news
 from omnivox_client import omnivox_request
@@ -24,11 +26,19 @@ host = os.environ.get("MCP_HOST") or "localhost"
 
 
 @mcp.tool()
-async def get_mio(num: int) -> str:
+async def get_mio(num: int = 10) -> AllMiosRes:
     """Get MIOs (internal messages) for a student's Omnivox."""
-    # TODO: replace path with actual Omnivox MIO endpoint once known
-    resp = await omnivox_request("/intr/Module/MessagerieEleve/Default.aspx")
-    return resp.text
+    if num < 1:
+        raise ValueError("num must be at least 1")
+
+    mios = await get_all_mios(AllMiosReq())
+    return AllMiosRes(mios=mios.mios[:num])
+
+
+@mcp.tool()
+async def get_mio_item(link: str) -> MioRes:
+    """Get the contents of a single Omnivox MIO."""
+    return await fetch_mio(MioReq(link=link))
 
 
 @mcp.tool()
