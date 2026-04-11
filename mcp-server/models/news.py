@@ -25,6 +25,8 @@ NEWS_LINK_SELECTOR_ENV = "NEWS_LINK_SELECTOR"
 NEWS_TITLE_SELECTOR_ENV = "NEWS_TITLE_SELECTOR"
 NEWS_CONTENT_SELECTOR_ENV = "NEWS_CONTENT_SELECTOR"
 REQUEST_TIMEOUT_SECONDS = 20.0
+OMNIVOX_BASE = "https://johnabbott.omnivox.ca"
+DEFAULT_NEWS_LIST_URL = f"{OMNIVOX_BASE}/intr/collegenews/"
 DEFAULT_LIST_LINK_SELECTOR = "a.carte-actualite[href]"
 DEFAULT_TITLE_SELECTOR = "h1.titre"
 DEFAULT_CONTENT_SELECTOR = ".description p, .description li"
@@ -83,7 +85,7 @@ def _load_config() -> NewsConfig:
             f"No auth token available. Set {NEWS_TOKEN_ENV} or run auth_manager.py to populate auth.txt."
         )
     return NewsConfig(
-        list_url=_get_env(NEWS_LIST_URL_ENV),
+        list_url=os.getenv(NEWS_LIST_URL_ENV, DEFAULT_NEWS_LIST_URL).strip(),
         token=token,
         auth_header=os.getenv(NEWS_AUTH_HEADER_ENV, "Cookie").strip(),
         auth_prefix=os.getenv(NEWS_AUTH_PREFIX_ENV, ""),
@@ -107,9 +109,25 @@ def _build_headers(config: NewsConfig) -> dict[str, str]:
     }
 
 
+_LOGIN_PATTERNS = ("/login", "identification=true")
+
+
+def _is_auth_redirect(response: httpx.Response) -> bool:
+    if response.status_code in (401, 403):
+        return True
+    if response.status_code in (301, 302, 303, 307, 308):
+        location = response.headers.get("location", "").lower()
+        return any(pat in location for pat in _LOGIN_PATTERNS)
+    return False
+
+
 def _fetch_html(url: str, config: NewsConfig) -> str:
-    with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True) as client:
+    with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False) as client:
         response = client.get(url, headers=_build_headers(config))
+        if _is_auth_redirect(response):
+            raise PermissionError(
+                "Omnivox session expired or invalid — run auth_manager.py to refresh auth.txt"
+            )
         response.raise_for_status()
         return response.text
 
