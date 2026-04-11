@@ -41,11 +41,11 @@ async def omnivox_request(
     If the response indicates an auth failure (401/403 or redirect to login),
     opens a browser popup for the user to re-login, then retries once.
     """
+    url = f"{OMNIVOX_BASE}{path}"
     cookies_str = await ensure_authenticated()
     if not cookies_str:
         raise RuntimeError("Authentication failed — no cookies obtained")
 
-    url = f"{OMNIVOX_BASE}{path}"
     headers = kwargs.pop("headers", {})
     headers["Cookie"] = cookies_str
 
@@ -55,7 +55,7 @@ async def omnivox_request(
         )
 
         if _is_auth_failure(resp):
-            cookies_str = await authenticate()
+            cookies_str = await authenticate(target_url=url)
             if not cookies_str:
                 raise RuntimeError("Re-authentication failed")
             headers["Cookie"] = cookies_str
