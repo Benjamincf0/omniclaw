@@ -1,36 +1,29 @@
 import os
-
 from fastmcp import FastMCP
-from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
-
+from omnivox_client import omnivox_request
 from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news, get_news as fetch_news
 
-# Anyone connecting must send: Authorization: Bearer my-secret-token
-auth = StaticTokenVerifier(
-    tokens={
-        os.environ["MCP_TOKEN"]: {
-            "client_id": "trusted-client",
-            "scopes": ["read", "write"],
-        }
-    }
-)
-
-# Initialize FastMCP server
-mcp = FastMCP("omniclaw", auth=auth)
-
-# Constants
+mcp = FastMCP("omniclaw")
 
 
 @mcp.tool()
 async def get_mio(num: int) -> str:
-    """get an MIO for a student's omnivox"""
-    return f"\n---\nHELLO WORLD FROM get_mio({num}) heheheh\n---\n"
+    """Get MIOs (internal messages) for a student's Omnivox."""
+    # TODO: replace path with actual Omnivox MIO endpoint once known
+    resp = await omnivox_request("/intr/Module/MessagerieEleve/Default.aspx")
+    return resp.text
 
 
 @mcp.tool()
 async def send_mio(subject: str, message: str) -> str:
-    """get an MIO for a student's omnivox"""
-    return f"\n---\nHELLO WORLD FROM get_subject(subject:{subject}, message:{message}) heheheh\n---\n"
+    """Send an MIO through a student's Omnivox."""
+    # TODO: replace with actual Omnivox send endpoint + proper form fields
+    resp = await omnivox_request(
+        "/intr/Module/MessagerieEleve/Envoyer.aspx",
+        method="POST",
+        data={"subject": subject, "message": message},
+    )
+    return resp.text
 
 
 @mcp.tool()
@@ -50,7 +43,6 @@ async def get_news_item(link: str) -> NewsRes:
 
 
 def main():
-    # run the server
     mcp.run(transport="http", host="0.0.0.0", port=8000)
 
 
