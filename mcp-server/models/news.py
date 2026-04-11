@@ -15,7 +15,7 @@ _SERVER_ROOT = Path(__file__).resolve().parent.parent
 if str(_SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVER_ROOT))
 
-from auth_manager import load_auth  # noqa: E402
+from auth_manager import authenticate, load_auth  # noqa: E402
 
 NEWS_LIST_URL_ENV = "NEWS_LIST_URL"
 NEWS_TOKEN_ENV = "NEWS_TOKEN"
@@ -55,7 +55,6 @@ class NewsRes(BaseModel):
 
 class NewsConfig(BaseModel):
     list_url: str
-    token: str
     auth_header: str = "Cookie"
     auth_prefix: str = ""
     link_selector: str | None = None
@@ -79,14 +78,8 @@ def _optional_env(name: str) -> str | None:
 
 
 def _load_config() -> NewsConfig:
-    token = os.getenv(NEWS_TOKEN_ENV, "").strip() or load_auth()
-    if not token:
-        raise ValueError(
-            f"No auth token available. Set {NEWS_TOKEN_ENV} or run auth_manager.py to populate auth.txt."
-        )
     return NewsConfig(
         list_url=os.getenv(NEWS_LIST_URL_ENV, DEFAULT_NEWS_LIST_URL).strip(),
-        token=token,
         auth_header=os.getenv(NEWS_AUTH_HEADER_ENV, "Cookie").strip(),
         auth_prefix=os.getenv(NEWS_AUTH_PREFIX_ENV, ""),
         link_selector=_optional_env(NEWS_LINK_SELECTOR_ENV)
@@ -98,8 +91,16 @@ def _load_config() -> NewsConfig:
 
 
 def _build_headers(config: NewsConfig) -> dict[str, str]:
+    token = os.getenv(NEWS_TOKEN_ENV, "").strip() or load_auth()
+    if not token:
+        return {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "User-Agent": DEFAULT_USER_AGENT,
+            "Referer": config.list_url,
+        }
+
     auth_value = (
-        f"{config.auth_prefix}{config.token}" if config.auth_prefix else config.token
+        f"{config.auth_prefix}{token}" if config.auth_prefix else token
     )
     return {
         config.auth_header: auth_value,
@@ -121,13 +122,42 @@ def _is_auth_redirect(response: httpx.Response) -> bool:
     return False
 
 
-def _fetch_html(url: str, config: NewsConfig) -> str:
-    with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False) as client:
-        response = client.get(url, headers=_build_headers(config))
+async def _ensure_news_token() -> str:
+    token = os.getenv(NEWS_TOKEN_ENV, "").strip() or load_auth()
+    if token:
+        return token
+
+    token = await authenticate()
+    if not token:
+        raise RuntimeError("Authentication failed — no cookies obtained")
+    return token
+
+
+def _headers_with_token(config: NewsConfig, token: str) -> dict[str, str]:
+    auth_value = f"{config.auth_prefix}{token}" if config.auth_prefix else token
+    headers = _build_headers(config)
+    headers[config.auth_header] = auth_value
+    return headers
+
+
+async def _fetch_html(url: str, config: NewsConfig) -> str:
+    token = await _ensure_news_token()
+
+    async with httpx.AsyncClient(
+        timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False
+    ) as client:
+        response = await client.get(url, headers=_headers_with_token(config, token))
         if _is_auth_redirect(response):
-            raise PermissionError(
-                "Omnivox session expired or invalid — run auth_manager.py to refresh auth.txt"
+            refreshed_token = await authenticate()
+            if not refreshed_token:
+                raise RuntimeError("Re-authentication failed")
+            response = await client.get(
+                url, headers=_headers_with_token(config, refreshed_token)
             )
+
+        if _is_auth_redirect(response):
+            raise PermissionError("Omnivox authentication failed after retry")
+
         response.raise_for_status()
         return response.text
 
@@ -287,10 +317,10 @@ def _extract_content(root: Tag | BeautifulSoup, selector: str | None) -> str:
     return "\n\n".join(blocks)
 
 
-def get_all_news(req: AllNewsReq) -> AllNewsRes:
+async def get_all_news(req: AllNewsReq) -> AllNewsRes:
     del req
     config = _load_config()
-    html = _fetch_html(config.list_url, config)
+    html = await _fetch_html(config.list_url, config)
     return AllNewsRes(
         news_links=_extract_news_links(
             html, base_url=config.list_url, selector=config.link_selector
@@ -298,9 +328,9 @@ def get_all_news(req: AllNewsReq) -> AllNewsRes:
     )
 
 
-def get_news(req: NewsReq) -> NewsRes:
+async def get_news(req: NewsReq) -> NewsRes:
     config = _load_config()
-    html = _fetch_html(req.link, config)
+    html = await _fetch_html(req.link, config)
     soup = BeautifulSoup(html, "html.parser")
     container = _find_matching_news_container(
         soup, _extract_requested_news_id(req.link)

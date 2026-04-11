@@ -49,14 +49,14 @@ async def get_news(num: int = 10) -> AllNewsRes:
     if num < 1:
         raise ValueError("num must be at least 1")
 
-    news = get_all_news(AllNewsReq())
+    news = await get_all_news(AllNewsReq())
     return AllNewsRes(news_links=news.news_links[:num])
 
 
 @mcp.tool()
 async def get_news_item(link: str) -> NewsRes:
     """get the contents of a single student news post"""
-    return fetch_news(NewsReq(link=link))
+    return await fetch_news(NewsReq(link=link))
 
 
 def main():
