@@ -3,8 +3,12 @@ name = "mcp-server"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=3.2.3",
     "mcp[cli]>=1.27.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "google-genai>=1.0.0",
+    "python-dotenv>=1.0.0",
 ]
