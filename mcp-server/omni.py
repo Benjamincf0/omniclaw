@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 from fastmcp import FastMCP
@@ -108,16 +109,23 @@ async def run_chat(message: str, history: list[dict]) -> str:
     """Send message to Gemini and return the text response."""
     contents = _build_contents(message, history)
 
-    response = await gemini_client.aio.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            tools=[],  # No tools for now, but we could add some in the future (e.g. calendar access, etc.
-        ),
-    )
-
-    return "\n".join(p.text for p in response.candidates[0].content.parts if p.text)
+    for attempt in range(3):
+        try:
+            response = await gemini_client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    tools=[],
+                ),
+            )
+            return "\n".join(p.text for p in response.candidates[0].content.parts if p.text)
+        except Exception as e:
+            # Attempts up to 3 times with exponential backoff (1s, 2s) before re-raising other exceptions, improving robustness against rate limiting/resource exhaustion.
+            if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) and attempt < 2:
+                await asyncio.sleep(2 ** attempt)  # 1s, 2s
+                continue
+            raise
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
