@@ -60,7 +60,6 @@ async def get_news_item(link: str) -> NewsRes:
 
 
 def main():
-    # run the server
     mcp.run(transport="http", host=host, port=8000)
 
 

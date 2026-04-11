@@ -1,32 +1,35 @@
 """
 Authenticated HTTP client for Omnivox.
 
-Handles cookie-based auth with automatic re-authentication via browser popup
-when the session expires or is missing.
+Checks auth.txt upfront: if missing or expired, launches the Playwright
+browser login *before* making any real request.
 """
 
 import httpx
-from auth_manager import load_auth, authenticate, LOGIN_PAGE_PATTERNS
+from auth_manager import load_auth, authenticate, validate_auth, LOGIN_PAGE_PATTERNS
 
 OMNIVOX_BASE = "https://johnabbott.omnivox.ca"
 
 
 def _is_auth_failure(response: httpx.Response) -> bool:
-    """Detect if a response indicates the session has expired or is invalid."""
     if response.status_code in (401, 403):
         return True
-    if response.status_code in (301, 302, 303, 307, 308):
-        location = response.headers.get("location", "")
-        if any(pat.lower() in location.lower() for pat in LOGIN_PAGE_PATTERNS):
-            return True
-    return False
+    location = response.headers.get("location", "").lower()
+    if any(pat.lower() in location for pat in LOGIN_PAGE_PATTERNS):
+        return True
+    body = response.text.lower()
+    return any(pat.lower() in body for pat in LOGIN_PAGE_PATTERNS)
 
 
 async def ensure_authenticated() -> str:
-    """Return valid cookies, prompting browser login if none are stored."""
+    """
+    Return valid cookies.  Checks auth.txt → validates with a test request →
+    launches Playwright browser login if missing or expired.
+    """
     cookies = load_auth()
-    if cookies:
+    if cookies and await validate_auth(cookies):
         return cookies
+
     return await authenticate()
 
 
@@ -35,12 +38,6 @@ async def omnivox_request(
     method: str = "GET",
     **kwargs,
 ) -> httpx.Response:
-    """
-    Make an authenticated request to Omnivox.
-
-    If the response indicates an auth failure (401/403 or redirect to login),
-    opens a browser popup for the user to re-login, then retries once.
-    """
     cookies_str = await ensure_authenticated()
     if not cookies_str:
         raise RuntimeError("Authentication failed — no cookies obtained")

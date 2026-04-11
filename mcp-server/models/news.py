@@ -15,7 +15,7 @@ _SERVER_ROOT = Path(__file__).resolve().parent.parent
 if str(_SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVER_ROOT))
 
-from auth_manager import authenticate, load_auth  # noqa: E402
+from auth_manager import authenticate, load_auth, validate_auth  # noqa: E402
 
 NEWS_LIST_URL_ENV = "NEWS_LIST_URL"
 NEWS_TOKEN_ENV = "NEWS_TOKEN"
@@ -116,16 +116,21 @@ _LOGIN_PATTERNS = ("/login", "identification=true")
 def _is_auth_redirect(response: httpx.Response) -> bool:
     if response.status_code in (401, 403):
         return True
-    if response.status_code in (301, 302, 303, 307, 308):
-        location = response.headers.get("location", "").lower()
-        return any(pat in location for pat in _LOGIN_PATTERNS)
-    return False
+    location = response.headers.get("location", "").lower()
+    if any(pat in location for pat in _LOGIN_PATTERNS):
+        return True
+    body = response.text.lower()
+    return any(pat in body for pat in _LOGIN_PATTERNS)
 
 
 async def _ensure_news_token() -> str:
-    token = os.getenv(NEWS_TOKEN_ENV, "").strip() or load_auth()
+    token = os.getenv(NEWS_TOKEN_ENV, "").strip()
     if token:
         return token
+
+    cookies = load_auth()
+    if cookies and await validate_auth(cookies):
+        return cookies
 
     token = await authenticate()
     if not token:

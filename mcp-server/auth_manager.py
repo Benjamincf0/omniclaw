@@ -1,10 +1,17 @@
 import asyncio
 import os
 from pathlib import Path
+
+import httpx
 from playwright.async_api import async_playwright, Request
 
 OMNIVOX_URL = "https://johnabbott.omnivox.ca"
 AUTH_FILE = Path(__file__).parent / "auth.txt"
+VALIDATE_URL = f"{OMNIVOX_URL}/intr/"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
 
 LOGGED_IN_PATTERNS = [
     "/intr/",
@@ -169,6 +176,37 @@ def load_auth() -> str | None:
     if AUTH_FILE.exists():
         return AUTH_FILE.read_text(encoding="utf-8").strip() or None
     return None
+
+
+def _response_is_login_redirect(resp: httpx.Response) -> bool:
+    """
+    Omnivox doesn't always return 401/403 for expired sessions. It may:
+      - 302 with a Location header pointing to Login.aspx
+      - 200 with an HTML body containing an <a href="...Login..."> redirect
+    """
+    location = resp.headers.get("location", "").lower()
+    if any(pat.lower() in location for pat in LOGIN_PAGE_PATTERNS):
+        return True
+
+    body = resp.text.lower()
+    return any(pat.lower() in body for pat in LOGIN_PAGE_PATTERNS)
+
+
+async def validate_auth(cookies: str) -> bool:
+    """Make a test request to Omnivox to check if the cookies are still valid."""
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            resp = await client.get(
+                VALIDATE_URL,
+                headers={"Cookie": cookies, "User-Agent": DEFAULT_USER_AGENT},
+            )
+            if resp.status_code in (401, 403):
+                return False
+            if _response_is_login_redirect(resp):
+                return False
+            return 200 <= resp.status_code < 400
+    except (httpx.HTTPError, OSError):
+        return False
 
 
 if __name__ == "__main__":
