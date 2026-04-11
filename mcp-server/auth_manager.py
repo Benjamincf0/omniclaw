@@ -1,9 +1,12 @@
 import asyncio
 import os
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx
 from playwright.async_api import async_playwright, Request
+
+MfaCodeProvider = Callable[[], Awaitable[str]]
 
 OMNIVOX_URL = "https://johnabbott.omnivox.ca"
 AUTH_FILE = Path(__file__).parent / "auth.txt"
@@ -72,11 +75,16 @@ def _request_to_curl_b(request: Request) -> str | None:
     return request.headers.get("cookie")
 
 
-async def authenticate() -> str:
+async def authenticate(
+    mfa_code_provider: MfaCodeProvider | None = None,
+) -> str:
     """
     Log in to Omnivox automatically using OMNIVOX_ID / OMNIVOX_PASSWORD
-    from .env, handle 2FA by prompting in the terminal, capture session
+    from .env, handle 2FA by prompting the user for a code, capture session
     cookies and save them to auth.txt.  Returns the cookie string.
+
+    *mfa_code_provider* is an async callable that returns the 2FA code.
+    When ``None`` (e.g. running standalone), falls back to terminal input.
     """
     _load_env()
 
@@ -126,7 +134,10 @@ async def authenticate() -> str:
 
         if not _is_logged_in(current_url) and not _is_login_page(current_url):
             print("\n2FA verification required.")
-            code = await asyncio.to_thread(input, "Enter your 2FA code: ")
+            if mfa_code_provider is not None:
+                code = await mfa_code_provider()
+            else:
+                code = await asyncio.to_thread(input, "Enter your 2FA code: ")
 
             mfa_input = page.locator(
                 'input[type="text"], input[type="tel"], input[type="number"]'

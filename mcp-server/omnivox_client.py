@@ -6,7 +6,13 @@ browser login *before* making any real request.
 """
 
 import httpx
-from auth_manager import load_auth, authenticate, validate_auth, LOGIN_PAGE_PATTERNS
+from auth_manager import (
+    LOGIN_PAGE_PATTERNS,
+    MfaCodeProvider,
+    authenticate,
+    load_auth,
+    validate_auth,
+)
 
 OMNIVOX_BASE = "https://johnabbott.omnivox.ca"
 
@@ -21,24 +27,28 @@ def _is_auth_failure(response: httpx.Response) -> bool:
     return any(pat.lower() in body for pat in LOGIN_PAGE_PATTERNS)
 
 
-async def ensure_authenticated() -> str:
+async def ensure_authenticated(
+    mfa_code_provider: MfaCodeProvider | None = None,
+) -> str:
     """
-    Return valid cookies.  Checks auth.txt → validates with a test request →
+    Return valid cookies.  Checks auth.txt -> validates with a test request ->
     launches Playwright browser login if missing or expired.
     """
     cookies = load_auth()
     if cookies and await validate_auth(cookies):
         return cookies
 
-    return await authenticate()
+    return await authenticate(mfa_code_provider=mfa_code_provider)
 
 
 async def omnivox_request(
     path: str,
     method: str = "GET",
+    *,
+    mfa_code_provider: MfaCodeProvider | None = None,
     **kwargs,
 ) -> httpx.Response:
-    cookies_str = await ensure_authenticated()
+    cookies_str = await ensure_authenticated(mfa_code_provider=mfa_code_provider)
     if not cookies_str:
         raise RuntimeError("Authentication failed — no cookies obtained")
 
@@ -52,7 +62,7 @@ async def omnivox_request(
         )
 
         if _is_auth_failure(resp):
-            cookies_str = await authenticate()
+            cookies_str = await authenticate(mfa_code_provider=mfa_code_provider)
             if not cookies_str:
                 raise RuntimeError("Re-authentication failed")
             headers["Cookie"] = cookies_str

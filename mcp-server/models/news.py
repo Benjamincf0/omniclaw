@@ -15,7 +15,12 @@ _SERVER_ROOT = Path(__file__).resolve().parent.parent
 if str(_SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVER_ROOT))
 
-from auth_manager import authenticate, load_auth, validate_auth  # noqa: E402
+from auth_manager import (  # noqa: E402
+    MfaCodeProvider,
+    authenticate,
+    load_auth,
+    validate_auth,
+)
 
 NEWS_LIST_URL_ENV = "NEWS_LIST_URL"
 NEWS_TOKEN_ENV = "NEWS_TOKEN"
@@ -123,7 +128,9 @@ def _is_auth_redirect(response: httpx.Response) -> bool:
     return any(pat in body for pat in _LOGIN_PATTERNS)
 
 
-async def _ensure_news_token() -> str:
+async def _ensure_news_token(
+    mfa_code_provider: MfaCodeProvider | None = None,
+) -> str:
     token = os.getenv(NEWS_TOKEN_ENV, "").strip()
     if token:
         return token
@@ -132,7 +139,7 @@ async def _ensure_news_token() -> str:
     if cookies and await validate_auth(cookies):
         return cookies
 
-    token = await authenticate()
+    token = await authenticate(mfa_code_provider=mfa_code_provider)
     if not token:
         raise RuntimeError("Authentication failed — no cookies obtained")
     return token
@@ -145,15 +152,21 @@ def _headers_with_token(config: NewsConfig, token: str) -> dict[str, str]:
     return headers
 
 
-async def _fetch_html(url: str, config: NewsConfig) -> str:
-    token = await _ensure_news_token()
+async def _fetch_html(
+    url: str,
+    config: NewsConfig,
+    mfa_code_provider: MfaCodeProvider | None = None,
+) -> str:
+    token = await _ensure_news_token(mfa_code_provider=mfa_code_provider)
 
     async with httpx.AsyncClient(
         timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False
     ) as client:
         response = await client.get(url, headers=_headers_with_token(config, token))
         if _is_auth_redirect(response):
-            refreshed_token = await authenticate()
+            refreshed_token = await authenticate(
+                mfa_code_provider=mfa_code_provider,
+            )
             if not refreshed_token:
                 raise RuntimeError("Re-authentication failed")
             response = await client.get(
@@ -322,10 +335,15 @@ def _extract_content(root: Tag | BeautifulSoup, selector: str | None) -> str:
     return "\n\n".join(blocks)
 
 
-async def get_all_news(req: AllNewsReq) -> AllNewsRes:
+async def get_all_news(
+    req: AllNewsReq,
+    mfa_code_provider: MfaCodeProvider | None = None,
+) -> AllNewsRes:
     del req
     config = _load_config()
-    html = await _fetch_html(config.list_url, config)
+    html = await _fetch_html(
+        config.list_url, config, mfa_code_provider=mfa_code_provider
+    )
     return AllNewsRes(
         news_links=_extract_news_links(
             html, base_url=config.list_url, selector=config.link_selector
@@ -333,9 +351,14 @@ async def get_all_news(req: AllNewsReq) -> AllNewsRes:
     )
 
 
-async def get_news(req: NewsReq) -> NewsRes:
+async def get_news(
+    req: NewsReq,
+    mfa_code_provider: MfaCodeProvider | None = None,
+) -> NewsRes:
     config = _load_config()
-    html = await _fetch_html(req.link, config)
+    html = await _fetch_html(
+        req.link, config, mfa_code_provider=mfa_code_provider
+    )
     soup = BeautifulSoup(html, "html.parser")
     container = _find_matching_news_container(
         soup, _extract_requested_news_id(req.link)
