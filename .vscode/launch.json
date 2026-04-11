@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug MCP Server (FastAPI)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/mcp-server/omni.py",
+      "python": "${workspaceFolder}/mcp-server/.venv/bin/python",
+      "cwd": "${workspaceFolder}/mcp-server",
+      "envFile": "${workspaceFolder}/mcp-server/.env",
+      "console": "integratedTerminal",
+      "jinja": true
+    },
+    {
+      "name": "Debug MCP Server (uvicorn, hot-reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "python": "${workspaceFolder}/mcp-server/.venv/bin/python",
+      "args": ["omni:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+      "cwd": "${workspaceFolder}/mcp-server",
+      "envFile": "${workspaceFolder}/mcp-server/.env",
+      "console": "integratedTerminal",
+      "jinja": true
+    }
+  ]
+}

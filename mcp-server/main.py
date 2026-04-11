@@ -1,6 +1,4 @@
-def main():
-    print("Hello from mcp-server!")
-
+from omni import main
 
 if __name__ == "__main__":
     main()
