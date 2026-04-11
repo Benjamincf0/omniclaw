@@ -6,14 +6,12 @@ the existing get_all_news / get_news functions.
 
 Run (from the mcp-server directory):
     uv run python test_news.py
-    # or
-    python test_news.py
 
 Requirements:
-  - auth.txt must contain a valid session cookie (run auth_manager.py first
-    if the file is missing or stale: `uv run python auth_manager.py`)
+  - If no valid Omnivox session is stored, the login window will open automatically.
 """
 
+import asyncio
 import sys
 import textwrap
 from pathlib import Path
@@ -32,9 +30,9 @@ def _section(title: str) -> None:
     print("=" * 60)
 
 
-def test_fetch_news_list() -> list[str]:
+async def test_fetch_news_list() -> list[str]:
     _section("1. Fetching news list")
-    result = get_all_news(AllNewsReq())
+    result = await get_all_news(AllNewsReq())
     links = result.news_links
 
     if not links:
@@ -50,9 +48,9 @@ def test_fetch_news_list() -> list[str]:
     return links
 
 
-def test_fetch_single_news(link: str) -> None:
+async def test_fetch_single_news(link: str) -> None:
     _section(f"2. Parsing article\n     {link}")
-    result = get_news(NewsReq(link=link))
+    result = await get_news(NewsReq(link=link))
 
     print(f"\n  Title   : {result.title}")
     print(f"\n  Content :\n")
@@ -60,14 +58,13 @@ def test_fetch_single_news(link: str) -> None:
         print(textwrap.indent(line, "    "))
 
 
-def main() -> None:
+async def main() -> None:
     print("Omnivox news model — integration test")
 
     try:
-        links = test_fetch_news_list()
+        links = await test_fetch_news_list()
     except PermissionError as exc:
         print(f"\n  [AUTH ERROR] {exc}")
-        print("  Run:  uv run python auth_manager.py   to refresh your session.")
         sys.exit(1)
     except Exception as exc:
         print(f"\n  [ERROR] Failed to fetch news list: {exc}")
@@ -79,10 +76,9 @@ def main() -> None:
 
     first_link = links[0]
     try:
-        test_fetch_single_news(first_link)
+        await test_fetch_single_news(first_link)
     except PermissionError as exc:
         print(f"\n  [AUTH ERROR] {exc}")
-        print("  Run:  uv run python auth_manager.py   to refresh your session.")
         sys.exit(1)
     except Exception as exc:
         print(f"\n  [ERROR] Failed to parse article: {exc}")
@@ -92,4 +88,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

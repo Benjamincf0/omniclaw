@@ -2,7 +2,7 @@
 Lightweight HTTP server for testing the Omnivox auth-retry flow without MCP.
 
 Run:
-    python test_server.py
+    uv run python test_server.py
 
 Then visit any of these in your browser:
     http://localhost:8080/test/auth          — trigger login & verify cookies
