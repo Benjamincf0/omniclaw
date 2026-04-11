@@ -26,11 +26,19 @@ async def send_mio(subject: str, message: str) -> str:
 
 
 @mcp.tool()
-async def get_news(num: int) -> str:
-    """Get the latest student news from Omnivox."""
-    # TODO: replace path with actual Omnivox news endpoint
-    resp = await omnivox_request("/intr/Module/Nouvelles/Default.aspx")
-    return resp.text
+async def get_news(num: int = 10) -> AllNewsRes:
+    """get the latest student news"""
+    if num < 1:
+        raise ValueError("num must be at least 1")
+
+    news = get_all_news(AllNewsReq())
+    return AllNewsRes(news_links=news.news_links[:num])
+
+
+@mcp.tool()
+async def get_news_item(link: str) -> NewsRes:
+    """get the contents of a single student news post"""
+    return fetch_news(NewsReq(link=link))
 
 
 def main():
