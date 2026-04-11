@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 from typing import Iterable
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup, Tag
 from pydantic import BaseModel
+
+# Ensure the mcp-server root is importable regardless of how this module is loaded
+_SERVER_ROOT = Path(__file__).resolve().parent.parent
+if str(_SERVER_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SERVER_ROOT))
+
+from auth_manager import load_auth  # noqa: E402
 
 NEWS_LIST_URL_ENV = "NEWS_LIST_URL"
 NEWS_TOKEN_ENV = "NEWS_TOKEN"
@@ -68,9 +77,14 @@ def _optional_env(name: str) -> str | None:
 
 
 def _load_config() -> NewsConfig:
+    token = os.getenv(NEWS_TOKEN_ENV, "").strip() or load_auth()
+    if not token:
+        raise ValueError(
+            f"No auth token available. Set {NEWS_TOKEN_ENV} or run auth_manager.py to populate auth.txt."
+        )
     return NewsConfig(
         list_url=_get_env(NEWS_LIST_URL_ENV),
-        token=_get_env(NEWS_TOKEN_ENV),
+        token=token,
         auth_header=os.getenv(NEWS_AUTH_HEADER_ENV, "Cookie").strip(),
         auth_prefix=os.getenv(NEWS_AUTH_PREFIX_ENV, ""),
         link_selector=_optional_env(NEWS_LINK_SELECTOR_ENV)
