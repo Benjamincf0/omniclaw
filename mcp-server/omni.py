@@ -1,8 +1,9 @@
 import os
-from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+
+from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news, get_news as fetch_news
 
 # Anyone connecting must send: Authorization: Bearer my-secret-token
 auth = StaticTokenVerifier(
@@ -15,7 +16,7 @@ auth = StaticTokenVerifier(
 )
 
 # Initialize FastMCP server
-mcp = FastMCP("weather", auth=auth)
+mcp = FastMCP("omniclaw", auth=auth)
 
 # Constants
 
@@ -33,9 +34,19 @@ async def send_mio(subject: str, message: str) -> str:
 
 
 @mcp.tool()
-async def get_news(num: int) -> str:
+async def get_news(num: int = 10) -> AllNewsRes:
     """get the latest student news"""
-    return f"\n---\nHELLO WORLD FROM get_news({num}) heheheh\n---\n"
+    if num < 1:
+        raise ValueError("num must be at least 1")
+
+    news = get_all_news(AllNewsReq())
+    return AllNewsRes(news_links=news.news_links[:num])
+
+
+@mcp.tool()
+async def get_news_item(link: str) -> NewsRes:
+    """get the contents of a single student news post"""
+    return fetch_news(NewsReq(link=link))
 
 
 def main():
