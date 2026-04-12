@@ -29,10 +29,13 @@ def _ensure_browsers_installed() -> None:
     """Install Playwright's Chromium browser if not already present."""
     try:
         from playwright._impl._driver import compute_driver_executable
+
         driver_exe, driver_cli = compute_driver_executable()
         result = subprocess.run(
             [str(driver_exe), str(driver_cli), "install", "chromium"],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         if result.returncode == 0:
             print("[auth] Playwright Chromium browser is ready.")
@@ -73,6 +76,7 @@ def _clear_profile_locks() -> list[Path]:
         path.unlink()
         removed.append(path)
     return removed
+
 
 # Lock so only one Playwright browser runs at a time (browsers are heavy).
 _browser_lock = asyncio.Lock()
@@ -192,7 +196,9 @@ def load_auth_cookies() -> list[dict[str, Any]] | None:
 
 
 def save_auth_cookies(cookies: list[dict[str, Any]] | None) -> str:
-    normalized = [_normalized_cookie(cookie) for cookie in (cookies or []) if cookie.get("name")]
+    normalized = [
+        _normalized_cookie(cookie) for cookie in (cookies or []) if cookie.get("name")
+    ]
     AUTH_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     AUTH_STATE_FILE.write_text(
         json.dumps(normalized, indent=2, sort_keys=True) + "\n",
@@ -281,11 +287,15 @@ async def authenticate(
                 except Exception as retry_exc:
                     if not _is_profile_lock_error(retry_exc):
                         raise
-                    print("[auth] Persistent browser profile is still locked after cleanup; falling back to a temporary browser context.")
+                    print(
+                        "[auth] Persistent browser profile is still locked after cleanup; falling back to a temporary browser context."
+                    )
                     browser = await pw.chromium.launch(headless=False)
                     context = await browser.new_context()
             else:
-                print("[auth] Persistent browser profile is still locked; falling back to a temporary browser context.")
+                print(
+                    "[auth] Persistent browser profile is still locked; falling back to a temporary browser context."
+                )
                 browser = await pw.chromium.launch(headless=False)
                 context = await browser.new_context()
         if restore_saved_cookies:
@@ -413,7 +423,7 @@ async def authenticate_headless(
 
     async with _browser_lock:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=False)
+            browser = await pw.chromium.launch(headless=True)
             context = await browser.new_context()
             page = await context.new_page()
 
@@ -437,7 +447,7 @@ async def authenticate_headless(
                 await page.fill(EMAIL_SELECTOR, email)
                 await page.fill(PASSWORD_SELECTOR, password)
                 await page.click(SUBMIT_SELECTOR)
-                await asyncio.sleep(10)
+                await asyncio.sleep(2)
             except Exception as exc:
                 await browser.close()
                 raise RuntimeError(
@@ -502,9 +512,11 @@ async def authenticate_headless(
 
             # Navigate to each warm URL so module-specific session tokens are
             # issued and captured in the browser context's cookie jar.
-            for warm_url in (warm_urls or []):
+            for warm_url in warm_urls or []:
                 try:
-                    await page.goto(warm_url, wait_until="domcontentloaded", timeout=10000)
+                    await page.goto(
+                        warm_url, wait_until="domcontentloaded", timeout=10000
+                    )
                     await asyncio.sleep(1)
                 except Exception as exc:
                     print(f"[auth] Warning: could not warm {warm_url}: {exc}")

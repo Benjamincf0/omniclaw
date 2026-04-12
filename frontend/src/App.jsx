@@ -17,6 +17,7 @@ import AuthPage from "./components/AuthPage"
 import SetupPage from "./components/SetupPage"
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000"
+const ORCHESTRATOR_URL = import.meta.env.VITE_ORCHESTRATOR_URL ?? "http://localhost:8080"
 
 // ── Loading spinner (shared) ──────────────────────────────────────────────────
 
@@ -46,6 +47,7 @@ function ChatPage() {
   const [showSettings, setShowSettings] = useState(false)
   const [messages, setMessages] = useState([])
   const [isTyping, setIsTyping] = useState(false)
+  const [sessionId, setSessionId] = useState(null)
   const bottomRef = useRef(null)
   const hasMessages = messages.length > 0
 
@@ -71,27 +73,22 @@ function ChatPage() {
       return
     }
     const userMessage = { role: "user", content: text, timestamp: Date.now() }
-    const updatedMessages = [...messages, userMessage]
-    setMessages(updatedMessages)
+    setMessages((prev) => [...prev, userMessage])
     setIsTyping(true)
-
-    const history = messages.map((m) => ({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
-    }))
 
     try {
       const token = await getAccessTokenSilently()
-      const res = await fetch(`${BACKEND_URL}/chat`, {
+      const res = await fetch(`${ORCHESTRATOR_URL}/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ message: text, history }),
+        body: JSON.stringify({ message: text, session_id: sessionId }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail ?? `Server error ${res.status}`)
+      setSessionId(data.session_id)
       setMessages((prev) => [...prev, { role: "assistant", content: data.reply, timestamp: Date.now() }])
     } catch {
       setMessages((prev) => [

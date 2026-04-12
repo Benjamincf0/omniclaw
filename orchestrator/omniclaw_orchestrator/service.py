@@ -58,7 +58,7 @@ class ChatService:
     def available_providers(self) -> list[str]:
         return self.llm_registry.available_providers()
 
-    async def chat(self, request: ChatRequest) -> ChatResponse:
+    async def chat(self, request: ChatRequest, bearer_token: str | None = None) -> ChatResponse:
         message_text = request.message.strip()
         if not message_text:
             raise ValueError("message must not be empty")
@@ -73,7 +73,17 @@ class ChatService:
         conversation: list[dict[str, Any]] = []
         tool_call_records: list[ToolCallRecord] = []
 
-        async with self.mcp_client_factory() as mcp_client:
+        if bearer_token:
+            from .config import McpServerConfig
+            override_servers = [
+                McpServerConfig(name=s.name, url=s.url, bearer_token=bearer_token)
+                for s in self.config.mcp_servers
+            ]
+            mcp_factory = lambda: MultiServerMcpClient(override_servers)
+        else:
+            mcp_factory = self.mcp_client_factory
+
+        async with mcp_factory() as mcp_client:
             tools = await mcp_client.list_tools()
             conversation = self._build_conversation(
                 history=history,

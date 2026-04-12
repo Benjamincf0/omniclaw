@@ -124,7 +124,30 @@ _token_verifier = JWTVerifier(
     audience=AUTH0_AUDIENCE,
 )
 
-auth = OAuthProxy(
+
+class HybridOAuthProxy(OAuthProxy):
+    """OAuthProxy that also accepts raw upstream (Auth0) JWTs directly.
+
+    Proper MCP clients (Claude Desktop, etc.) go through the PKCE flow and
+    receive FastMCP-signed JWTs — those continue to work via the parent class.
+
+    The orchestrator forwards the user's raw Auth0 JWT obtained from
+    getAccessTokenSilently().  This subclass accepts both by falling back to
+    the upstream token verifier when the FastMCP JWT check fails.  The Auth0
+    JWT contains the user's 'sub' claim so tool identity resolution is
+    preserved exactly as it would be for a proper MCP client session.
+    """
+
+    async def load_access_token(self, token: str):  # type: ignore[override]
+        # Fast path: proper MCP client with a FastMCP-issued JWT
+        result = await super().load_access_token(token)
+        if result is not None:
+            return result
+        # Fallback: raw Auth0 JWT forwarded by the orchestrator
+        return await self._token_validator.verify_token(token)
+
+
+auth = HybridOAuthProxy(
     upstream_authorization_endpoint=f"https://{AUTH0_DOMAIN}/authorize",
     upstream_token_endpoint=f"https://{AUTH0_DOMAIN}/oauth/token",
     upstream_client_id=AUTH0_CLIENT_ID,
@@ -1018,31 +1041,29 @@ _SCHEMA_KEYS = {f["key"] for f in SETTINGS_SCHEMA}
 _SECRET_KEYS = {f["key"] for f in SETTINGS_SCHEMA if f["secret"]}
 
 
-@mcp.custom_route("/api/settings", methods=["GET"])
-async def get_settings(request: Request) -> Response:
-    """Return the settings schema with current values."""
-    fields = []
-    for field in SETTINGS_SCHEMA:
-        raw = os.environ.get(field["key"], "")
-        entry = {
-            "key": field["key"],
-            "label": field["label"],
-            "secret": field["secret"],
-            "group": field["group"],
-            "value": _mask(raw) if (field["secret"] and raw) else raw,
-            "is_set": bool(raw),
-        }
-        if "type" in field:
-            entry["type"] = field["type"]
-        if "options" in field:
-            entry["options"] = field["options"]
-        fields.append(entry)
-    return _json({"fields": fields, "config_path": str(_config_path())})
+@mcp.custom_route("/api/settings", methods=["GET", "POST"])
+async def settings(request: Request) -> Response:
+    """GET: return settings schema with values. POST: update settings."""
+    if request.method == "GET":
+        fields = []
+        for field in SETTINGS_SCHEMA:
+            raw = os.environ.get(field["key"], "")
+            entry = {
+                "key": field["key"],
+                "label": field["label"],
+                "secret": field["secret"],
+                "group": field["group"],
+                "value": _mask(raw) if (field["secret"] and raw) else raw,
+                "is_set": bool(raw),
+            }
+            if "type" in field:
+                entry["type"] = field["type"]
+            if "options" in field:
+                entry["options"] = field["options"]
+            fields.append(entry)
+        return _json({"fields": fields, "config_path": str(_config_path())})
 
-
-@mcp.custom_route("/api/settings", methods=["POST"])
-async def save_settings(request: Request) -> Response:
-    """Update settings and optionally notify the orchestrator to reload."""
+    # POST — update settings
     try:
         body = await request.json()
     except Exception:
