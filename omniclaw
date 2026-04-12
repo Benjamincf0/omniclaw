@@ -101,7 +101,7 @@ def build_runtime_env() -> dict[str, str]:
             transport_path = f"/{transport_path}"
         transport_path = transport_path.rstrip("/") or "/mcp"
         env["MCP_SERVER_URLS"] = (
-            f"omnivox=http://127.0.0.1:{env['MCP_PORT'].strip()}{transport_path}"
+            f"omnivox=http://127.0.0.1:{env['MCP_PORT'].strip()}{transport_path}/"
         )
 
     return env

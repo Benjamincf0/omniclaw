@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
 import { X, Eye, EyeOff, Save, Loader2, CheckCircle, AlertCircle } from "lucide-react"
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000"
+const SETTINGS_URL = import.meta.env.VITE_SETTINGS_URL ?? ""
 
 export default function SettingsModal({ onClose }) {
   const [fields, setFields] = useState([])
@@ -12,7 +12,7 @@ export default function SettingsModal({ onClose }) {
   const [message, setMessage] = useState(null)
 
   useEffect(() => {
-    fetch(`${BACKEND_URL}/api/settings`)
+    fetch(`${SETTINGS_URL}/api/settings`)
       .then((r) => r.json())
       .then((data) => {
         setFields(data.fields)
@@ -33,13 +33,13 @@ export default function SettingsModal({ onClose }) {
     setSaving(true)
     setMessage(null)
     try {
-      const res = await fetch(`${BACKEND_URL}/api/settings`, {
+      const res = await fetch(`${SETTINGS_URL}/api/settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: values }),
       })
       if (!res.ok) throw new Error()
-      const refreshed = await fetch(`${BACKEND_URL}/api/settings`).then((r) => r.json())
+      const refreshed = await fetch(`${SETTINGS_URL}/api/settings`).then((r) => r.json())
       setFields(refreshed.fields)
       const vals = {}
       refreshed.fields.forEach((f) => {

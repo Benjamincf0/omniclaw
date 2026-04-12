@@ -92,7 +92,7 @@ def _parse_named_mapping(raw: str) -> dict[str, str]:
 
 def _load_mcp_servers() -> list[McpServerConfig]:
     raw_urls = os.getenv(
-        "MCP_SERVER_URLS", "omnivox=http://127.0.0.1:8000/mcp"
+        "MCP_SERVER_URLS", "omnivox=http://127.0.0.1:8000/mcp/"
     ).strip()
     raw_tokens = os.getenv("MCP_SERVER_AUTH_TOKENS", "").strip()
 
