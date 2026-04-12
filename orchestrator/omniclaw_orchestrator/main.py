@@ -11,5 +11,6 @@ def main() -> None:
         "omniclaw_orchestrator.server:app",
         host=config.host,
         port=config.port,
-        reload=False,
+        reload=True,  # Enable auto-reload for development
+        reload_dirs=["omniclaw_orchestrator"],
     )
