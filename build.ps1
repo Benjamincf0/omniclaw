@@ -70,10 +70,15 @@ if (-not $SkipFrontend) {
 Write-Step "Bundling with PyInstaller"
 Push-Location $Server
 try {
-    python -m pip install pyinstaller --quiet
+    $VenvPython = Join-Path $Server ".venv\Scripts\python.exe"
+    if (-not (Test-Path $VenvPython)) {
+        throw "Virtual environment not found at $VenvPython. Run 'uv sync' inside mcp-server/ first."
+    }
+
+    & $VenvPython -m pip install pyinstaller --quiet
     if ($LASTEXITCODE -ne 0) { throw "pip install pyinstaller failed" }
 
-    python -m PyInstaller omniclaw.spec --noconfirm --clean
+    & $VenvPython -m PyInstaller omniclaw.spec --noconfirm --clean
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
 } finally {
     Pop-Location
