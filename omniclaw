@@ -74,6 +74,10 @@ def load_env_file(path: Path) -> None:
 def build_runtime_env() -> dict[str, str]:
     env = os.environ.copy()
 
+    # Force non-editable installs so uv run doesn't revert to .pth-based editable
+    # mode (which Python 3.13 silently skips for underscore-prefixed .pth files).
+    env.setdefault("UV_NO_EDITABLE", "1")
+
     env.setdefault("MCP_HOST", "127.0.0.1")
     env.setdefault("MCP_PORT", "8000")
     env.setdefault("MCP_TRANSPORT_PATH", "/mcp")
@@ -126,7 +130,7 @@ def run_sync(env: dict[str, str]) -> int:
     for service in SERVICES:
         print(f"[sync] {service.name}: uv sync")
         result = subprocess.run(
-            ("uv", "sync"),
+            ("uv", "sync", "--no-editable"),
             cwd=service.cwd,
             env=env,
             check=False,

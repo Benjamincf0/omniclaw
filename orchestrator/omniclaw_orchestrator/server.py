@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from .config import load_config
 from .contracts import ChatRequest, ChatResponse, HealthResponse
@@ -12,6 +13,13 @@ def create_app() -> FastAPI:
     service = ChatService.from_config(config)
 
     app = FastAPI(title="Omniclaw Orchestrator", version="0.1.0")
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:

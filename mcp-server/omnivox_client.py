@@ -49,7 +49,7 @@ async def omnivox_request(
     headers = kwargs.pop("headers", {})
     headers["Cookie"] = cookies_str
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=False) as client:
         resp = await client.request(
             method, url, headers=headers, follow_redirects=False, **kwargs
         )

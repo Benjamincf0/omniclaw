@@ -141,6 +141,10 @@ class MultiServerMcpClient:
         tool = self._tools_by_name.get(name)
         if tool is None:
             raise ValueError(f"Unknown MCP tool: {name}")
+        # Strip any arguments the LLM hallucinated that aren't in the tool schema.
+        known_params = set(tool.input_schema.get("properties", {}).keys())
+        if known_params:
+            arguments = {k: v for k, v in arguments.items() if k in known_params}
         connection = self._connections[tool.server_name]
         result = await connection.session.call_tool(tool.remote_name, arguments)
         return _serialize_tool_result(result)
