@@ -98,46 +98,37 @@ export default function App() {
 
       <Sidebar activePage={page} onNavigate={setPage} consent={consent} onOpenConsent={openConsent} />
 
-      <div className="flex flex-1 items-stretch overflow-hidden bg-textured-parchment">
+      {/* Main content - chat fills available space */}
+      <div className="flex flex-col flex-1 min-w-0 h-full overflow-hidden">
 
-        {/* Left spacer — keeps chat card centered */}
-        <div className="flex-1" />
+        {page === "chat" && (
+          <>
+            <Header onSettingsClick={() => setShowSettings(true)} />
+            <div
+              className="flex-1 overflow-y-auto py-4 bg-textured-warm"
+            >
+              {!hasMessages && (
+                <div className="flex flex-col gap-6">
+                  <WelcomeScreen />
+                  <QuickChips onSelect={handleSend} />
+                </div>
+              )}
+              {messages.map((msg, i) => (
+                <Message key={i} role={msg.role} content={msg.content} timestamp={msg.timestamp} />
+              ))}
+              {isTyping && <TypingIndicator />}
+              <div ref={bottomRef} />
+            </div>
+            <ChatInput onSend={handleSend} disabled={isTyping || !consent} />
+          </>
+        )}
 
-        {/* Fixed-width content card */}
-        <div className="flex flex-col h-full shrink-0" style={{ width: "640px" }}>
-
-          {page === "chat" && (
-            <>
-              <Header onSettingsClick={() => setShowSettings(true)} />
-              <div
-                className="flex-1 overflow-y-auto py-4 bg-textured-warm"
-              >
-                {!hasMessages && (
-                  <div className="flex flex-col gap-6">
-                    <WelcomeScreen />
-                    <QuickChips onSelect={handleSend} />
-                  </div>
-                )}
-                {messages.map((msg, i) => (
-                  <Message key={i} role={msg.role} content={msg.content} timestamp={msg.timestamp} />
-                ))}
-                {isTyping && <TypingIndicator />}
-                <div ref={bottomRef} />
-              </div>
-              <ChatInput onSend={handleSend} disabled={isTyping || !consent} />
-            </>
-          )}
-
-          {page === "howto" && <HowToUse />}
-
-        </div>
-
-        {/* Right panel — always visible */}
-        <div className="flex-1 flex justify-start">
-          <GlancePanel />
-        </div>
+        {page === "howto" && <HowToUse />}
 
       </div>
+
+      {/* Right panel — fixed width, directly next to chat */}
+      <GlancePanel />
 
       {/* Settings modal */}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
