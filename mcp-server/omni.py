@@ -1,5 +1,6 @@
 import asyncio
 import os
+from functools import lru_cache
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -38,7 +39,11 @@ load_dotenv()
 mcp = FastMCP("omniclaw")
 
 # Constants
-host = os.environ.get("MCP_HOST") or "localhost"
+MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1").strip() or "127.0.0.1"
+MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
+MCP_TRANSPORT_PATH = (
+    "/" + os.getenv("MCP_TRANSPORT_PATH", "/mcp").strip().strip("/")
+).rstrip("/") or "/mcp"
 
 
 @mcp.tool()
@@ -150,7 +155,19 @@ GEMINI_TOOLS = [
     )
 ]
 
-gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+class GeminiConfigurationError(RuntimeError):
+    pass
+
+
+@lru_cache(maxsize=1)
+def _get_gemini_client() -> genai.Client:
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise GeminiConfigurationError(
+            "GEMINI_API_KEY is required to use the legacy /chat endpoint."
+        )
+    return genai.Client(api_key=api_key)
 
 SYSTEM_PROMPT = (
     "You are Omniclaw, a helpful assistant for John Abbott College (JAC) students. "
@@ -180,6 +197,7 @@ def _build_contents(message: str, history: list[dict]) -> list[types.Content]:
 
 async def _generate(contents: list) -> types.GenerateContentResponse:
     """Call Gemini with exponential backoff on rate limit errors."""
+    gemini_client = _get_gemini_client()
     for attempt in range(3):
         try:
             return await gemini_client.aio.models.generate_content(
@@ -235,7 +253,15 @@ async def run_chat(message: str, history: list[dict]) -> str:
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Omniclaw API")
+mcp_http_app = mcp.http_app(
+    path=MCP_TRANSPORT_PATH,
+    transport="streamable-http",
+)
+
+app = FastAPI(
+    title="Omniclaw API",
+    lifespan=mcp_http_app.lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -261,6 +287,8 @@ async def chat(body: ChatRequest):
     try:
         reply = await run_chat(body.message, body.history)
         return ChatResponse(reply=reply)
+    except GeminiConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         msg = str(e)
         status = 429 if "429" in msg or "RESOURCE_EXHAUSTED" in msg else 502
@@ -269,7 +297,15 @@ async def chat(body: ChatRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model": "gemini-2.5-flash"}
+    return {
+        "status": "ok",
+        "mcp_path": MCP_TRANSPORT_PATH,
+        "gemini_chat_enabled": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+        "model": "gemini-2.5-flash",
+    }
+
+
+app.mount("/", mcp_http_app)
 
 
 # ── Static frontend serving ──────────────────────────────────────────────────
@@ -284,12 +320,7 @@ if _static_dir.is_dir():
 
 
 def main():
-    # run the server
-    # mcp.run(transport="http", host="0.0.0.0", port=8000) # turn on MCP server to use the external AI clients 
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False) # run FastAPI server for the frontend to connect to
-
-
-    # mcp.run(transport="http", host=host, port=8000)
+    uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, reload=False)
 
 
 if __name__ == "__main__":
