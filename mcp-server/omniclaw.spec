@@ -102,6 +102,7 @@ a = Analysis(
     ] + _optional_secrets + _all_datas + _playwright_driver_datas(),
     hiddenimports=[
         # local app modules (not auto-discoverable by static analysis)
+        "config_paths",
         "omni",
         "omnivox_client",
         "auth_manager",

@@ -18,6 +18,8 @@ import time
 import webbrowser
 from pathlib import Path
 
+from config_paths import user_config_file
+
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 8000
 ORCHESTRATOR_HOST = "127.0.0.1"
@@ -34,10 +36,8 @@ def _base_dir() -> Path:
 
 
 def _user_config_path() -> Path:
-    """Writable config file next to the executable (written by the Settings UI)."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "omniclaw.env"
-    return Path(__file__).resolve().parent / "omniclaw.env"
+    """Writable env file (Application Support when frozen, repo .env when dev)."""
+    return user_config_file()
 
 
 def _load_env_file(env_file: Path, *, override: bool = False) -> None:
@@ -65,7 +65,10 @@ def _load_env_file(env_file: Path, *, override: bool = False) -> None:
 
 def _load_env() -> None:
     _load_env_file(_user_config_path(), override=True)
-    _load_env_file(_base_dir() / ".env")
+    if getattr(sys, "frozen", False):
+        legacy = Path(sys.executable).parent / "omniclaw.env"
+        _load_env_file(legacy, override=False)
+    _load_env_file(_base_dir() / ".env", override=False)
 
 
 def _set_defaults() -> None:

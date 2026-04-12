@@ -39,6 +39,7 @@ from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
 from models.news import get_news as fetch_news
 from omnivox_client import omnivox_request
 from auth_manager import load_auth
+from config_paths import user_config_file
 
 from google import genai
 from google.genai import types
@@ -498,11 +499,8 @@ async def health():
 # ── Settings API ─────────────────────────────────────────────────────────────
 
 def _config_path() -> Path:
-    """Writable config file in project root (shared with orchestrator)."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "omniclaw.env"
-    # Go up from mcp-server/omni.py to project root
-    return Path(__file__).resolve().parent.parent / ".env"
+    """Writable config file (see config_paths.user_config_file)."""
+    return user_config_file()
 
 
 def _read_persistent_config() -> dict[str, str]:
@@ -646,7 +644,17 @@ async def save_settings(body: SettingsUpdate):
             config.pop(key, None)
             os.environ.pop(key, None)
 
-    _write_persistent_config(config)
+    try:
+        _write_persistent_config(config)
+    except OSError as exc:
+        logger.exception("Failed to write settings to %s", _config_path())
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Cannot write config file ({exc}). "
+                "If you use the desktop app, ensure it can write to Application Support."
+            ),
+        ) from exc
     _get_gemini_client.cache_clear()
     
     # Notify orchestrator to reload its config
