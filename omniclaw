@@ -111,10 +111,7 @@ def validate_env(env: dict[str, str]) -> list[str]:
     raw_provider = env.get("MODEL_PROVIDER", "openai").strip().lower() or "openai"
     provider = MODEL_PROVIDER_ALIASES.get(raw_provider)
     if provider is None:
-        missing = ["MODEL_PROVIDER"]
-        if not env.get("DISCORD_BOT_TOKEN", "").strip():
-            missing.append("DISCORD_BOT_TOKEN")
-        return missing
+        return ["MODEL_PROVIDER"]
     required_by_provider = {
         "openai": ("OPENAI_API_KEY", "OPENAI_MODEL"),
         "ollama": ("OLLAMA_MODEL",),
@@ -124,7 +121,7 @@ def validate_env(env: dict[str, str]) -> list[str]:
 
     missing = [
         name
-        for name in (*required_by_provider[provider], "DISCORD_BOT_TOKEN")
+        for name in required_by_provider[provider]
         if not env.get(name, "").strip()
     ]
     return missing
@@ -211,8 +208,13 @@ def run_up(env: dict[str, str], *, do_sync: bool) -> int:
     previous_sigterm = signal.signal(signal.SIGTERM, request_stop)
     exit_code = 0
 
+    has_discord_token = bool(env.get("DISCORD_BOT_TOKEN", "").strip())
+    services = [s for s in SERVICES if s.name != "discord" or has_discord_token]
+    if not has_discord_token:
+        print("[omniclaw] DISCORD_BOT_TOKEN not set, skipping discord bot.")
+
     try:
-        for service in SERVICES:
+        for service in services:
             process = subprocess.Popen(
                 service.command,
                 cwd=service.cwd,
