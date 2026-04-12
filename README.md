@@ -26,6 +26,10 @@ The easiest way to run the full stack on one server is from the repo root:
 cp .env.example .env
 ./omniclaw up
 ```
+or for Windows users
+```cmd
+python ./omniclaw up
+```
 
 That command will:
 
