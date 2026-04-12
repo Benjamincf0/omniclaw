@@ -1,12 +1,12 @@
 """
 Authenticated HTTP client for Omnivox.
 
-Handles cookie-based auth with automatic re-authentication via browser popup
+Handles cookie-based auth with automatic re-authentication
 when the session expires or is missing.
 """
 
 import httpx
-from auth_manager import load_auth, authenticate, LOGIN_PAGE_PATTERNS
+from auth_manager import load_auth, auth_manager, LOGIN_PAGE_PATTERNS
 
 OMNIVOX_BASE = "https://johnabbott.omnivox.ca"
 
@@ -23,11 +23,11 @@ def _is_auth_failure(response: httpx.Response) -> bool:
 
 
 async def ensure_authenticated() -> str:
-    """Return valid cookies, prompting browser login if none are stored."""
+    """Return valid cookies, triggering auto-login if none are stored."""
     cookies = load_auth()
     if cookies:
         return cookies
-    return await authenticate()
+    return await auth_manager.authenticate()
 
 
 async def omnivox_request(
@@ -39,7 +39,7 @@ async def omnivox_request(
     Make an authenticated request to Omnivox.
 
     If the response indicates an auth failure (401/403 or redirect to login),
-    opens a browser popup for the user to re-login, then retries once.
+    re-authenticates automatically then retries once.
     """
     url = f"{OMNIVOX_BASE}{path}"
     cookies_str = await ensure_authenticated()
@@ -55,7 +55,7 @@ async def omnivox_request(
         )
 
         if _is_auth_failure(resp):
-            cookies_str = await authenticate(target_url=url)
+            cookies_str = await auth_manager.authenticate(target_url=url)
             if not cookies_str:
                 raise RuntimeError("Re-authentication failed")
             headers["Cookie"] = cookies_str

@@ -1,5 +1,6 @@
 import asyncio
 import os
+from contextlib import asynccontextmanager
 
 from fastmcp import FastMCP
 
@@ -8,6 +9,7 @@ from models.mio import get_mio as fetch_mio
 from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
 from models.news import get_news as fetch_news
 from omnivox_client import omnivox_request
+from auth_manager import auth_manager, load_auth, AuthState
 
 from google import genai
 from google.genai import types
@@ -230,7 +232,17 @@ async def run_chat(message: str, history: list[dict]) -> str:
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Omniclaw API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if load_auth():
+        auth_manager.state = AuthState.AUTHENTICATED
+    else:
+        asyncio.create_task(auth_manager.authenticate())
+    yield
+
+
+app = FastAPI(title="Omniclaw API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -238,6 +250,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Auth endpoints ────────────────────────────────────────────────────────────
+
+
+class MfaRequest(BaseModel):
+    code: str
+
+
+@app.get("/auth/status")
+async def auth_status():
+    return auth_manager.get_status()
+
+
+@app.post("/auth/mfa")
+async def auth_mfa(body: MfaRequest):
+    result = await auth_manager.submit_mfa_code(body.code)
+    return result
+
+
+# ── Chat endpoints ────────────────────────────────────────────────────────────
 
 
 class ChatRequest(BaseModel):
