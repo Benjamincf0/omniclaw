@@ -1,7 +1,16 @@
 import asyncio
 import os
 
+import uvicorn
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastmcp import FastMCP
+from fastmcp.server.auth.providers.auth0 import Auth0Provider
+from fastmcp.server.dependencies import get_access_token
+from google import genai
+from google.genai import types
+from pydantic import BaseModel
 
 from models.mio import AllMiosReq, AllMiosRes, MioReq, MioRes, get_all_mios
 from models.mio import get_mio as fetch_mio
@@ -9,15 +18,7 @@ from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
 from models.news import get_news as fetch_news
 from omnivox_client import omnivox_request
 
-from google import genai
-from google.genai import types
-from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-from dotenv import load_dotenv
-
-# Load environment variables 
+# Load environment variables
 load_dotenv()
 # Anyone connecting must send: Authorization: Bearer my-secret-token
 # auth = StaticTokenVerifier(
@@ -28,9 +29,23 @@ load_dotenv()
 #         }
 #     }
 # )
+# setup oauth
+auth = Auth0Provider(
+    config_url=os.environ["AUTH0_CONFIG_URL"],
+    client_id=os.environ["AUTH0_CLIENT_ID"],
+    client_secret=os.environ["AUTH0_CLIENT_SECRET"],
+    audience=os.environ["AUTH0_AUDIENCE"],
+    base_url=os.environ.get("AUTH0_BASE_URL", "http://localhost:8000"),
+)
+
+
+async def get_omnivox_token(user_id: str) -> str:
+    """Get the Omnivox token for a user."""
+    return "asdfasdf"
+
 
 # Initialize FastMCP server
-mcp = FastMCP("omniclaw")
+mcp = FastMCP("omniclaw", auth=auth)
 
 # Constants
 host = os.environ.get("MCP_HOST") or "localhost"
@@ -80,11 +95,6 @@ async def get_news_item(link: str) -> NewsRes:
     return await fetch_news(NewsReq(link=link))
 
 
-
-
-
-
-
 # ── Gemini setup ──────────────────────────────────────────────────────────────
 
 TOOL_HANDLERS = {
@@ -103,7 +113,10 @@ GEMINI_TOOLS = [
                 parameters=types.Schema(
                     type=types.Type.OBJECT,
                     properties={
-                        "num": types.Schema(type=types.Type.INTEGER, description="How many MIO messages to fetch."),
+                        "num": types.Schema(
+                            type=types.Type.INTEGER,
+                            description="How many MIO messages to fetch.",
+                        ),
                     },
                     required=["num"],
                 ),
@@ -114,8 +127,12 @@ GEMINI_TOOLS = [
                 parameters=types.Schema(
                     type=types.Type.OBJECT,
                     properties={
-                        "subject": types.Schema(type=types.Type.STRING, description="Message subject."),
-                        "message": types.Schema(type=types.Type.STRING, description="Message body."),
+                        "subject": types.Schema(
+                            type=types.Type.STRING, description="Message subject."
+                        ),
+                        "message": types.Schema(
+                            type=types.Type.STRING, description="Message body."
+                        ),
                     },
                     required=["subject", "message"],
                 ),
@@ -126,7 +143,10 @@ GEMINI_TOOLS = [
                 parameters=types.Schema(
                     type=types.Type.OBJECT,
                     properties={
-                        "num": types.Schema(type=types.Type.INTEGER, description="How many news items to fetch (default 10)."),
+                        "num": types.Schema(
+                            type=types.Type.INTEGER,
+                            description="How many news items to fetch (default 10).",
+                        ),
                     },
                 ),
             ),
@@ -136,7 +156,9 @@ GEMINI_TOOLS = [
                 parameters=types.Schema(
                     type=types.Type.OBJECT,
                     properties={
-                        "link": types.Schema(type=types.Type.STRING, description="The news post URL."),
+                        "link": types.Schema(
+                            type=types.Type.STRING, description="The news post URL."
+                        ),
                     },
                     required=["link"],
                 ),
@@ -185,9 +207,10 @@ async def _generate(contents: list) -> types.GenerateContentResponse:
                     tools=GEMINI_TOOLS,
                 ),
             )
+
         except Exception as e:
             if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) and attempt < 2:
-                await asyncio.sleep(2 ** attempt)  # 1s, 2s
+                await asyncio.sleep(2**attempt)  # 1s, 2s
                 continue
             raise
 
@@ -222,7 +245,9 @@ async def run_chat(message: str, history: list[dict]) -> str:
                 result = f"Unknown tool: {fc.name}"
 
             tool_results.append(
-                types.Part.from_function_response(name=fc.name, response={"result": result})
+                types.Part.from_function_response(
+                    name=fc.name, response={"result": result}
+                )
             )
 
         contents.append(types.Content(role="user", parts=tool_results))
@@ -270,14 +295,14 @@ async def health():
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
-
 def main():
     # run the server
-    # mcp.run(transport="http", host="0.0.0.0", port=8000) # turn on MCP server to use the external AI clients 
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False) # run FastAPI server for the frontend to connect to
+    # mcp.run(transport="http", host="0.0.0.0", port=8000) # turn on MCP server to use the external AI clients
+    # uvicorn.run(
+    #     app, host="0.0.0.0", port=8000, reload=False
+    # )  # run FastAPI server for the frontend to connect to
 
-
-    # mcp.run(transport="http", host=host, port=8000)
+    mcp.run(transport="http", host=host, port=8000)
 
 
 if __name__ == "__main__":
