@@ -1,9 +1,12 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urlparse
-from playwright.async_api import async_playwright, Request
+
+from playwright.async_api import Request, async_playwright
 
 OMNIVOX_URL = "https://johnabbott.omnivox.ca"
+OMNIVOX_LOGIN_URL = f"{OMNIVOX_URL}/Login/Account/Login"
 AUTH_FILE = Path(__file__).parent / "auth.txt"
 
 # Lock so only one Playwright browser runs at a time (browsers are heavy).
@@ -24,6 +27,12 @@ LOGIN_PAGE_PATTERNS = [
     "/login",
     "Identification=True",
 ]
+
+# 2FA verification-code input selector.
+# IMPORTANT: verify this against the actual Omnivox 2FA page HTML and update if needed.
+# Open DevTools on the 2FA page and inspect the code input's id/name attribute.
+_OTP_INPUT_SELECTOR = "main input.MuiInputBase-input"
+_OTP_SUBMIT_SELECTOR = "main button.MuiButton-root[type=button]"
 
 
 def _is_logged_in(url: str) -> bool:
@@ -64,7 +73,7 @@ async def authenticate(target_url: str | None = None) -> str:
     (curl -b format), and save to auth.txt.
     Returns the cookie string.
     """
-    target = target_url or OMNIVOX_URL
+    target = target_url or OMNIVOX_LOGIN_URL
     module_hint = _module_hint(target)
 
     print(f"Opening Omnivox login page: {target}")
@@ -92,7 +101,11 @@ async def authenticate(target_url: str | None = None) -> str:
 
         page.on("request", on_request)
 
-        await page.goto(target)
+        await page.goto(OMNIVOX_LOGIN_URL)
+
+        # DEBUG: wait 10 seconds after opening the login page
+        print("DEBUG: waiting 1 seconds after page load...")
+        await asyncio.sleep(1)
 
         print("Waiting for login...")
         poll_interval = 1  # seconds
@@ -109,7 +122,7 @@ async def authenticate(target_url: str | None = None) -> str:
                 print(f"Detected logged-in URL: {current_url}")
                 break
 
-        if target != OMNIVOX_URL:
+        if target not in (OMNIVOX_URL, OMNIVOX_LOGIN_URL):
             print(f"Warming target module: {target}")
             await page.goto(target)
 
@@ -161,25 +174,26 @@ async def authenticate_headless(
     email: str,
     password: str,
     user_id: str,
+    otp_callback: Callable[[], Awaitable[str]] | None = None,
 ) -> str:
     """
     Log in to Omnivox programmatically using *email* and *password*.
 
-    Runs a headless Chromium browser, fills the login form, submits it,
-    waits for a post-login redirect, then captures and returns the session
-    cookies.  Persists them to user_tokens.json under *user_id*.
+    Runs a headless Chromium browser, fills the login form, submits it, and
+    waits for a post-login redirect.  If Omnivox presents a 2FA verification
+    step, *otp_callback* is awaited to obtain the code; it must be provided
+    when 2FA is expected, otherwise a RuntimeError is raised.
 
-    Raises RuntimeError if login fails (wrong credentials, unexpected page, etc.).
+    Captures and returns the session cookies, persisting them under *user_id*.
+
+    Raises RuntimeError if login fails (wrong credentials, 2FA timeout, etc.).
     """
     from user_store import save_omnivox_cookies
 
-    LOGIN_URL = (
-        f"{OMNIVOX_URL}/intr/Module/Identification/Login/LoginJAC.aspx?C=JAC&L=ANG"
-    )
     # Selectors for the JAC Omnivox login page (may need adjustment if Omnivox updates).
     EMAIL_SELECTOR = "#Identifiant"
-    PASSWORD_SELECTOR = "#SaisieMotPasse"
-    SUBMIT_SELECTOR = "#BoutonSoumettre"
+    PASSWORD_SELECTOR = "#Password"
+    SUBMIT_SELECTOR = "#formLogin button[type=submit]"
 
     cookie_body: str | None = None
 
@@ -202,37 +216,74 @@ async def authenticate_headless(
             page.on("request", on_request)
 
             # Navigate to the login page.
-            await page.goto(LOGIN_URL, wait_until="domcontentloaded")
+            await page.goto(OMNIVOX_LOGIN_URL, wait_until="domcontentloaded")
 
             # Fill in credentials.
             try:
                 await page.fill(EMAIL_SELECTOR, email)
                 await page.fill(PASSWORD_SELECTOR, password)
                 await page.click(SUBMIT_SELECTOR)
+                await asyncio.sleep(10)
             except Exception as exc:
                 await browser.close()
                 raise RuntimeError(
                     f"Could not interact with Omnivox login form: {exc}"
                 ) from exc
 
-            # Wait up to 15 seconds for a post-login redirect.
-            deadline = 15
-            interval = 0.5
-            elapsed = 0.0
-            while elapsed < deadline:
-                await asyncio.sleep(interval)
-                elapsed += interval
-                try:
-                    current_url = page.url
-                except Exception:
-                    break
-                if _is_logged_in(current_url):
-                    break
-                if _is_login_page(current_url) and elapsed > 5:
-                    # Still on login page after 5 s → wrong credentials.
+            # Wait for the page to settle after credential submit.
+            try:
+                await page.wait_for_load_state("networkidle", timeout=9000)
+            except Exception:
+                pass  # Timeout is fine; we check the URL state below.
+
+            if not _is_logged_in(page.url):
+                if await page.query_selector(_OTP_INPUT_SELECTOR):
+                    # Omnivox presented a 2FA / verification-code step.
+                    if otp_callback is None:
+                        await browser.close()
+                        raise RuntimeError(
+                            "Omnivox requires a verification code but no callback was provided."
+                        )
+                    try:
+                        print("Waiting for 2FA code...")
+                        code = await otp_callback()
+                        print(f"2FA code: {code} tyoe: {type(code)}")
+                    except Exception:
+                        print("2FA code callback failed.")
+                        await browser.close()
+                        raise
+                    try:
+                        print(
+                            f"Submitting 2FA code...{code} {_OTP_INPUT_SELECTOR}, {_OTP_SUBMIT_SELECTOR}"
+                        )
+                        await page.fill(_OTP_INPUT_SELECTOR, code)
+                        # await asyncio.sleep(15)
+                        await page.click(_OTP_SUBMIT_SELECTOR)
+                    except Exception as exc:
+                        await browser.close()
+                        raise RuntimeError(
+                            f"Could not submit verification code: {exc}"
+                        ) from exc
+
+                    # Wait for login after 2FA (up to 15 s).
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=5000)
+                    except Exception:
+                        pass
+                    for _ in range(30):
+                        await asyncio.sleep(0.5)
+                        if _is_logged_in(page.url):
+                            break
+                    else:
+                        await browser.close()
+                        raise RuntimeError(
+                            "Omnivox 2FA verification failed or timed out."
+                        )
+                else:
+                    # Not logged in and no OTP field → wrong credentials.
                     await browser.close()
                     raise RuntimeError(
-                        "Omnivox login failed — check your email and password."
+                        "Omnivox login failed — check your student ID and password."
                     )
 
             # Give a moment for post-login requests to fire so we capture cookies.

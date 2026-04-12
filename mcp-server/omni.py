@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 
 import httpx as _httpx
 from dotenv import load_dotenv
@@ -54,7 +55,7 @@ from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes
 from models.news import get_all_news as _get_all_news
 from models.news import get_news as _get_news_detail
 from omnivox_client import omnivox_request_for_user
-from user_store import has_omnivox_cookies
+from user_store import delete_omnivox_cookies, has_omnivox_cookies
 
 # ---------------------------------------------------------------------------
 # Environment
@@ -418,6 +419,45 @@ def _json(data: dict, status: int = 200) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Headless-login session store (for the two-phase /setup-omnivox flow)
+# ---------------------------------------------------------------------------
+# Each session is a plain dict:
+#   {
+#     "status": "running" | "needs_otp" | "success" | "error",
+#     "event":  asyncio.Event,   # fired when the frontend submits an OTP code
+#     "otp":    str | None,      # the code, set just before event.set()
+#     "error":  str | None,      # set on failure
+#   }
+
+_sessions: dict[str, dict] = {}
+
+
+async def _await_otp(session: dict) -> str:
+    """Signal the frontend that an OTP is needed, then wait for it (5-min limit)."""
+    session["status"] = "needs_otp"
+    try:
+        await asyncio.wait_for(session["event"].wait(), timeout=300.0)
+    except asyncio.TimeoutError:
+        raise RuntimeError("Timed out waiting for 2FA code (5-minute limit).")
+    return session["otp"]
+
+
+async def _run_login(session: dict, email: str, password: str, user_id: str) -> None:
+    """Background task: run authenticate_headless and update session on completion."""
+    try:
+        await authenticate_headless(
+            email,
+            password,
+            user_id,
+            otp_callback=lambda: _await_otp(session),
+        )
+        session["status"] = "success"
+    except Exception as exc:
+        session["error"] = str(exc)
+        session["status"] = "error"
+
+
+# ---------------------------------------------------------------------------
 # Custom HTTP routes (registered on the FastMCP server so they share port 8000)
 # ---------------------------------------------------------------------------
 
@@ -441,8 +481,12 @@ async def account_status(request: Request) -> Response:
 @mcp.custom_route("/setup-omnivox", methods=["POST"])
 async def setup_omnivox(request: Request) -> Response:
     """
-    Accepts Omnivox email + password from the web setup page.
-    Runs a headless Playwright login, captures cookies, stores them for the user.
+    Start a headless Omnivox login for the authenticated user.
+
+    Accepts { email, password } and immediately returns { session_id }.
+    The login runs in the background; poll /setup-status?session_id=<id> for
+    progress.  If Omnivox requires 2FA, status becomes "needs_otp" — submit
+    the code to POST /setup-2fa to resume.
 
     Requires:  Authorization: Bearer <auth0_access_token>
     """
@@ -461,14 +505,73 @@ async def setup_omnivox(request: Request) -> Response:
     if not email or not password:
         return _json({"detail": "Email and password are required."}, 400)
 
-    try:
-        await authenticate_headless(email, password, user_id)
-    except RuntimeError as exc:
-        return _json({"detail": str(exc)}, 400)
-    except Exception as exc:
-        return _json({"detail": f"Unexpected error: {exc}"}, 500)
+    session_id = secrets.token_urlsafe(16)
+    session: dict = {
+        "status": "running",
+        "event": asyncio.Event(),
+        "otp": None,
+        "error": None,
+    }
+    _sessions[session_id] = session
 
-    return _json({"success": True, "message": "Omnivox account linked successfully."})
+    asyncio.create_task(_run_login(session, email, password, user_id))
+
+    return _json({"session_id": session_id})
+
+
+@mcp.custom_route("/setup-status", methods=["GET"])
+async def setup_status(request: Request) -> Response:
+    """Poll the status of an in-progress headless Omnivox login session."""
+    session_id: str = request.query_params.get("session_id", "")
+    session = _sessions.get(session_id)
+    if not session:
+        return _json({"detail": "Session not found."}, 404)
+
+    status = session["status"]
+    result: dict = {"status": status}
+
+    if status == "error":
+        result["detail"] = session["error"]
+        del _sessions[session_id]
+    elif status == "success":
+        del _sessions[session_id]
+
+    return _json(result)
+
+
+@mcp.custom_route("/setup-2fa", methods=["POST"])
+async def setup_2fa(request: Request) -> Response:
+    """Submit a 2FA verification code for an in-progress login session."""
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"detail": "Invalid JSON body."}, 400)
+
+    session_id: str = (body.get("session_id") or "").strip()
+    code: str = (body.get("code") or "").strip()
+
+    session = _sessions.get(session_id)
+    if not session:
+        return _json({"detail": "Session not found."}, 404)
+    if session["status"] != "needs_otp":
+        return _json({"detail": "Session is not waiting for a verification code."}, 400)
+    if not code:
+        return _json({"detail": "Code is required."}, 400)
+
+    session["otp"] = code
+    session["event"].set()
+
+    return _json({"ok": True})
+
+
+@mcp.custom_route("/unlink-omnivox", methods=["DELETE"])
+async def unlink_omnivox(request: Request) -> Response:
+    """Remove the authenticated user's stored Omnivox cookies."""
+    user_id = await _require_user_id(request)
+    if not user_id:
+        return _json({"detail": "Missing or invalid Authorization header."}, 401)
+    await delete_omnivox_cookies(user_id)
+    return _json({"success": True})
 
 
 @mcp.custom_route("/chat", methods=["POST"])

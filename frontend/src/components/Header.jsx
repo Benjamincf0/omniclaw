@@ -2,8 +2,10 @@ import { useState, useRef, useEffect } from "react"
 import { useAuth0 } from "@auth0/auth0-react"
 import { useNavigate } from "react-router-dom"
 
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000"
+
 export default function Header() {
-  const { isAuthenticated, user, logout } = useAuth0()
+  const { isAuthenticated, user, logout, getAccessTokenSilently } = useAuth0()
   const navigate = useNavigate()
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
@@ -27,6 +29,20 @@ export default function Header() {
   const handleReconnect = () => {
     setMenuOpen(false)
     navigate("/setup")
+  }
+
+  const handleDisconnect = async () => {
+    setMenuOpen(false)
+    try {
+      const token = await getAccessTokenSilently()
+      await fetch(`${BACKEND_URL}/unlink-omnivox`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      })
+    } catch {
+      // Ignore errors — navigate away regardless so the user isn't stuck.
+    }
+    navigate("/")
   }
 
   return (
@@ -87,6 +103,12 @@ export default function Header() {
                     className="w-full text-left px-4 py-2.5 text-sm text-[#a0a0b0] hover:text-[#e8e8f0] hover:bg-[#6c63ff]/5 transition-colors cursor-pointer"
                   >
                     Reconnect Omnivox
+                  </button>
+                  <button
+                    onClick={handleDisconnect}
+                    className="w-full text-left px-4 py-2.5 text-sm text-[#a0a0b0] hover:text-red-400 hover:bg-red-500/5 transition-colors cursor-pointer"
+                  >
+                    Disconnect Omnivox
                   </button>
                   <button
                     onClick={handleLogout}
