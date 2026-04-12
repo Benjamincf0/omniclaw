@@ -52,6 +52,24 @@ def clear_auth_state(*, include_profile: bool = False) -> list[Path]:
 
     return removed
 
+
+def _profile_lock_paths() -> list[Path]:
+    return [
+        PLAYWRIGHT_PROFILE_DIR / "SingletonCookie",
+        PLAYWRIGHT_PROFILE_DIR / "SingletonLock",
+        PLAYWRIGHT_PROFILE_DIR / "SingletonSocket",
+    ]
+
+
+def _clear_profile_locks() -> list[Path]:
+    removed: list[Path] = []
+    for path in _profile_lock_paths():
+        if not path.exists() and not path.is_symlink():
+            continue
+        path.unlink()
+        removed.append(path)
+    return removed
+
 # After login, Omnivox redirects to URLs containing these patterns
 LOGGED_IN_PATTERNS = [
     "/intr/",
@@ -190,20 +208,36 @@ def _module_hint(url: str) -> str:
     return path or "/"
 
 
-async def authenticate(target_url: str | None = None) -> str:
+def _login_entry_url() -> str:
+    return f"{OMNIVOX_URL}/intr/"
+
+
+def _is_profile_lock_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "singleton" in message or "processsingleton" in message
+
+
+async def authenticate(
+    target_url: str | None = None,
+    *,
+    restore_saved_cookies: bool = True,
+) -> str:
     """
     Open Omnivox in a real browser, reuse any previously saved cookies,
     optionally warm a specific module URL, capture the refreshed session
     cookies, and save them to disk.
     Returns the cookie string.
     """
-    target = target_url or OMNIVOX_URL
+    target = target_url or _login_entry_url()
+    login_entry = _login_entry_url()
     module_hint = _module_hint(target)
 
     _ensure_browsers_installed()
     from playwright.async_api import Request, async_playwright
 
-    print(f"Opening Omnivox login page: {target}")
+    print(f"Opening Omnivox login page: {login_entry}")
+    if target != login_entry:
+        print(f"Target module to warm after login: {target}")
     print("Please log in with your credentials. The window will close automatically.\n")
     print(f"Using persistent browser profile: {PLAYWRIGHT_PROFILE_DIR}")
 
@@ -211,16 +245,46 @@ async def authenticate(target_url: str | None = None) -> str:
 
     async with async_playwright() as pw:
         PLAYWRIGHT_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        context = await pw.chromium.launch_persistent_context(
-            str(PLAYWRIGHT_PROFILE_DIR),
-            headless=False,
-        )
-        existing_cookies = load_auth_cookies()
-        if existing_cookies:
-            try:
-                await context.add_cookies(existing_cookies)
-            except Exception as exc:
-                print(f"[auth] Could not restore saved cookies: {exc}")
+        browser = None
+        try:
+            context = await pw.chromium.launch_persistent_context(
+                str(PLAYWRIGHT_PROFILE_DIR),
+                headless=False,
+            )
+        except Exception as exc:
+            if not _is_profile_lock_error(exc):
+                raise
+
+            removed = _clear_profile_locks()
+            if removed:
+                print("[auth] Cleared stale browser profile lock files:")
+                for path in removed:
+                    print(f"[auth]   - {path}")
+                try:
+                    context = await pw.chromium.launch_persistent_context(
+                        str(PLAYWRIGHT_PROFILE_DIR),
+                        headless=False,
+                    )
+                except Exception as retry_exc:
+                    if not _is_profile_lock_error(retry_exc):
+                        raise
+                    print("[auth] Persistent browser profile is still locked after cleanup; falling back to a temporary browser context.")
+                    browser = await pw.chromium.launch(headless=False)
+                    context = await browser.new_context()
+            else:
+                print("[auth] Persistent browser profile is still locked; falling back to a temporary browser context.")
+                browser = await pw.chromium.launch(headless=False)
+                context = await browser.new_context()
+        if restore_saved_cookies:
+            existing_cookies = load_auth_cookies()
+            if existing_cookies:
+                try:
+                    await context.add_cookies(existing_cookies)
+                except Exception as exc:
+                    print(f"[auth] Could not restore saved cookies: {exc}")
+        else:
+            await context.clear_cookies()
+            print("[auth] Starting with a fresh Omnivox cookie jar.")
         page = await context.new_page()
 
         captured_cookies: str | None = None
@@ -238,7 +302,7 @@ async def authenticate(target_url: str | None = None) -> str:
 
         page.on("request", on_request)
 
-        await page.goto(target)
+        await page.goto(login_entry)
 
         print("Waiting for login...")
         poll_interval = 1  # seconds
@@ -255,7 +319,7 @@ async def authenticate(target_url: str | None = None) -> str:
                 print(f"Detected logged-in URL: {current_url}")
                 break
 
-        if target != OMNIVOX_URL:
+        if target != login_entry:
             print(f"Warming target module: {target}")
             await page.goto(target)
 
@@ -271,11 +335,15 @@ async def authenticate(target_url: str | None = None) -> str:
         if not cookie_body:
             print("WARNING: No cookies captured. Authentication may have failed.")
             await context.close()
+            if browser is not None:
+                await browser.close()
             return ""
 
         print(f"\nCaptured cookie body ({len(cookie_body)} chars)")
 
         await context.close()
+        if browser is not None:
+            await browser.close()
 
     print(f"Saved to {AUTH_FILE} and {AUTH_STATE_FILE}")
 

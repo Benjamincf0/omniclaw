@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 from auth_manager import (
     authenticate,
+    clear_auth_state,
     load_auth,
     load_auth_cookies,
     save_auth_cookies,
@@ -164,7 +165,8 @@ async def omnivox_request_url(
     )
 
     if _is_auth_failure(response):
-        await authenticate(target_url=url)
+        clear_auth_state(include_profile=False)
+        await authenticate(target_url=url, restore_saved_cookies=False)
         response = await _request_with_saved_session(
             url,
             method,

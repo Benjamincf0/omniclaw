@@ -8,6 +8,8 @@ Then visit any of these in your browser:
     http://localhost:8080/test/auth          — trigger login & verify cookies
     http://localhost:8080/test/get_mio       — test get_mio (hits Omnivox)
     http://localhost:8080/test/get_news      — test get_news (hits Omnivox)
+    http://localhost:8080/test/get_calendar  — test calendar page (hits Omnivox)
+    http://localhost:8080/test/get_classes   — test LEA classes page (hits Omnivox)
 """
 
 import json
@@ -24,6 +26,8 @@ async def index(request):
         {"path": "/test/auth", "description": "Trigger login popup & verify cookies"},
         {"path": "/test/get_mio", "description": "Fetch MIO page from Omnivox"},
         {"path": "/test/get_news", "description": "Fetch News page from Omnivox"},
+        {"path": "/test/get_calendar", "description": "Fetch the Omnivox homepage calendar"},
+        {"path": "/test/get_classes", "description": "Fetch the LEA classes dashboard"},
     ]
     return JSONResponse({"available_routes": routes})
 
@@ -63,12 +67,42 @@ async def test_get_news(request):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+async def test_get_calendar(request):
+    """Hit the Omnivox homepage through the auth-retry client."""
+    try:
+        resp = await omnivox_request("/intr/")
+        return PlainTextResponse(
+            f"[{resp.status_code}] {resp.url}\n\n{resp.text[:2000]}"
+        )
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+async def test_get_classes(request):
+    """Hit the LEA classes page through the auth-retry client."""
+    try:
+        resp = await omnivox_request(
+            "/intr/Module/ServicesExterne/Skytech.aspx"
+            "?IdServiceSkytech=Skytech_Omnivox"
+            "&lk=%2festd%2fcvie"
+            "&IdService=CVIE"
+            "&C=JAC&E=P&L=ANG"
+        )
+        return PlainTextResponse(
+            f"[{resp.status_code}] {resp.url}\n\n{resp.text[:2000]}"
+        )
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
 app = Starlette(
     routes=[
         Route("/", index),
         Route("/test/auth", test_auth),
         Route("/test/get_mio", test_get_mio),
         Route("/test/get_news", test_get_news),
+        Route("/test/get_calendar", test_get_calendar),
+        Route("/test/get_classes", test_get_classes),
     ],
 )
 
