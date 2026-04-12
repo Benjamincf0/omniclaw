@@ -1,12 +1,24 @@
 import asyncio
+import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
-from playwright.async_api import async_playwright, Request
 
 OMNIVOX_URL = "https://johnabbott.omnivox.ca"
-AUTH_FILE = Path(__file__).parent / "auth.txt"
+
+
+def _storage_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent
+
+
+AUTH_FILE = _storage_dir() / "auth.txt"
+AUTH_STATE_FILE = _storage_dir() / "auth_state.json"
+PLAYWRIGHT_PROFILE_DIR = _storage_dir() / "omnivox-browser-profile"
 
 
 def _ensure_browsers_installed() -> None:
@@ -25,6 +37,20 @@ def _ensure_browsers_installed() -> None:
     except Exception as exc:
         print(f"[auth] Could not auto-install Playwright browsers: {exc}")
         print("[auth] Run 'playwright install chromium' manually if login fails.")
+
+
+def clear_auth_state(*, include_profile: bool = False) -> list[Path]:
+    removed: list[Path] = []
+    for path in (AUTH_FILE, AUTH_STATE_FILE):
+        if path.exists():
+            path.unlink()
+            removed.append(path)
+
+    if include_profile and PLAYWRIGHT_PROFILE_DIR.exists():
+        shutil.rmtree(PLAYWRIGHT_PROFILE_DIR)
+        removed.append(PLAYWRIGHT_PROFILE_DIR)
+
+    return removed
 
 # After login, Omnivox redirects to URLs containing these patterns
 LOGGED_IN_PATTERNS = [
@@ -56,7 +82,97 @@ def _cookies_to_curl_b(cookies: list[dict]) -> str:
     return "; ".join(f"{c['name']}={c['value']}" for c in cookies)
 
 
-def _request_to_curl_b(request: Request) -> str | None:
+def _omnivox_host() -> str:
+    parsed = urlparse(OMNIVOX_URL)
+    return parsed.hostname or "johnabbott.omnivox.ca"
+
+
+def _normalized_cookie(cookie: dict[str, Any]) -> dict[str, Any]:
+    normalized = {
+        "name": str(cookie["name"]),
+        "value": str(cookie["value"]),
+    }
+    for key in ("domain", "path", "expires", "httpOnly", "secure", "sameSite"):
+        value = cookie.get(key)
+        if value not in (None, ""):
+            normalized[key] = value
+    if "domain" not in normalized:
+        normalized["domain"] = _omnivox_host()
+    if "path" not in normalized:
+        normalized["path"] = "/"
+    return normalized
+
+
+def _load_cookie_state() -> list[dict[str, Any]] | None:
+    if not AUTH_STATE_FILE.exists():
+        return None
+    try:
+        raw = json.loads(AUTH_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw, list):
+        return None
+
+    cookies: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        value = item.get("value")
+        if not name or value is None:
+            continue
+        cookies.append(_normalized_cookie(item))
+    return cookies or None
+
+
+def _load_legacy_cookie_header() -> str | None:
+    if AUTH_FILE.exists():
+        return AUTH_FILE.read_text(encoding="utf-8").strip() or None
+    return None
+
+
+def _legacy_cookie_header_to_state(cookie_header: str) -> list[dict[str, Any]]:
+    cookies: list[dict[str, Any]] = []
+    for part in cookie_header.split(";"):
+        name, sep, value = part.strip().partition("=")
+        if not sep or not name:
+            continue
+        cookies.append(
+            {
+                "name": name,
+                "value": value,
+                "domain": _omnivox_host(),
+                "path": "/",
+                "secure": True,
+            }
+        )
+    return cookies
+
+
+def load_auth_cookies() -> list[dict[str, Any]] | None:
+    cookies = _load_cookie_state()
+    if cookies:
+        return cookies
+
+    legacy = _load_legacy_cookie_header()
+    if not legacy:
+        return None
+    return _legacy_cookie_header_to_state(legacy) or None
+
+
+def save_auth_cookies(cookies: list[dict[str, Any]] | None) -> str:
+    normalized = [_normalized_cookie(cookie) for cookie in (cookies or []) if cookie.get("name")]
+    AUTH_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    AUTH_STATE_FILE.write_text(
+        json.dumps(normalized, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    cookie_header = _cookies_to_curl_b(normalized)
+    AUTH_FILE.write_text(cookie_header, encoding="utf-8")
+    return cookie_header
+
+
+def _request_to_curl_b(request: Any) -> str | None:
     """Extract the cookie header from a Playwright request (same as curl -b)."""
     headers = request.headers
     cookie = headers.get("cookie")
@@ -76,24 +192,35 @@ def _module_hint(url: str) -> str:
 
 async def authenticate(target_url: str | None = None) -> str:
     """
-    Open Omnivox in a real browser, wait for the user to log in,
-    optionally warm a specific module URL, capture the session cookies
-    (curl -b format), and save to auth.txt.
+    Open Omnivox in a real browser, reuse any previously saved cookies,
+    optionally warm a specific module URL, capture the refreshed session
+    cookies, and save them to disk.
     Returns the cookie string.
     """
     target = target_url or OMNIVOX_URL
     module_hint = _module_hint(target)
 
     _ensure_browsers_installed()
+    from playwright.async_api import Request, async_playwright
 
     print(f"Opening Omnivox login page: {target}")
     print("Please log in with your credentials. The window will close automatically.\n")
+    print(f"Using persistent browser profile: {PLAYWRIGHT_PROFILE_DIR}")
 
     cookie_body: str | None = None
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=False)
-        context = await browser.new_context()
+        PLAYWRIGHT_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        context = await pw.chromium.launch_persistent_context(
+            str(PLAYWRIGHT_PROFILE_DIR),
+            headless=False,
+        )
+        existing_cookies = load_auth_cookies()
+        if existing_cookies:
+            try:
+                await context.add_cookies(existing_cookies)
+            except Exception as exc:
+                print(f"[auth] Could not restore saved cookies: {exc}")
         page = await context.new_page()
 
         captured_cookies: str | None = None
@@ -137,30 +264,30 @@ async def authenticate(target_url: str | None = None) -> str:
 
         # Fallback: grab cookies directly from the browser context
         all_cookies = await context.cookies()
-        context_cookie_str = _cookies_to_curl_b(all_cookies)
+        context_cookie_str = save_auth_cookies(all_cookies)
 
         cookie_body = target_cookies or captured_cookies or context_cookie_str
 
         if not cookie_body:
             print("WARNING: No cookies captured. Authentication may have failed.")
-            await browser.close()
+            await context.close()
             return ""
 
         print(f"\nCaptured cookie body ({len(cookie_body)} chars)")
 
-        await browser.close()
+        await context.close()
 
-    AUTH_FILE.write_text(cookie_body, encoding="utf-8")
-    print(f"Saved to {AUTH_FILE}")
+    print(f"Saved to {AUTH_FILE} and {AUTH_STATE_FILE}")
 
     return cookie_body
 
 
 def load_auth() -> str | None:
-    """Load previously saved auth cookies from auth.txt, or None if missing."""
-    if AUTH_FILE.exists():
-        return AUTH_FILE.read_text(encoding="utf-8").strip() or None
-    return None
+    """Load previously saved auth cookies as a Cookie header string."""
+    cookies = load_auth_cookies()
+    if cookies:
+        return _cookies_to_curl_b(cookies)
+    return _load_legacy_cookie_header()
 
 
 if __name__ == "__main__":
