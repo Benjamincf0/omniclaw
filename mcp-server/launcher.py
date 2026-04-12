@@ -33,8 +33,14 @@ def _base_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
-def _load_env() -> None:
-    env_file = _base_dir() / ".env"
+def _user_config_path() -> Path:
+    """Writable config file next to the executable (written by the Settings UI)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "omniclaw.env"
+    return Path(__file__).resolve().parent / "omniclaw.env"
+
+
+def _load_env_file(env_file: Path, *, override: bool = False) -> None:
     if not env_file.exists():
         return
     for raw_line in env_file.read_text(encoding="utf-8").splitlines():
@@ -47,12 +53,19 @@ def _load_env() -> None:
         if not sep:
             continue
         key = key.strip()
-        if not key or key in os.environ:
+        if not key:
+            continue
+        if not override and key in os.environ:
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
         os.environ[key] = value
+
+
+def _load_env() -> None:
+    _load_env_file(_user_config_path(), override=True)
+    _load_env_file(_base_dir() / ".env")
 
 
 def _set_defaults() -> None:
