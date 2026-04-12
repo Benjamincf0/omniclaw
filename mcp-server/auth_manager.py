@@ -2,18 +2,18 @@ import asyncio
 import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+from config_paths import user_data_dir
 
 OMNIVOX_URL = "https://johnabbott.omnivox.ca"
 
 
 def _storage_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent
+    """Always user-writable (Application Support when frozen, not inside .app bundle)."""
+    return user_data_dir()
 
 
 AUTH_FILE = _storage_dir() / "auth.txt"
