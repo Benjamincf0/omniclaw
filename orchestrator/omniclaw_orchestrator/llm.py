@@ -606,6 +606,7 @@ class ModelClientRegistry:
         self, provider_config: ModelProviderConfig, *, model: str
     ) -> ChatClient:
         provider = provider_config.provider
+        print(f"Building client for provider '{provider}' and model '{model}'")
         if provider == "openai":
             if not provider_config.api_key:
                 raise ValueError("OPENAI_API_KEY is required for provider 'openai'")
