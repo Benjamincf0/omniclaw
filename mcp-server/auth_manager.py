@@ -3,11 +3,15 @@ import json
 import shutil
 import subprocess
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from playwright.async_api import Request, async_playwright
+
 OMNIVOX_URL = "https://johnabbott.omnivox.ca"
+OMNIVOX_LOGIN_URL = f"{OMNIVOX_URL}/Login/Account/Login"
 
 
 def _storage_dir() -> Path:
@@ -25,10 +29,13 @@ def _ensure_browsers_installed() -> None:
     """Install Playwright's Chromium browser if not already present."""
     try:
         from playwright._impl._driver import compute_driver_executable
+
         driver_exe, driver_cli = compute_driver_executable()
         result = subprocess.run(
             [str(driver_exe), str(driver_cli), "install", "chromium"],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         if result.returncode == 0:
             print("[auth] Playwright Chromium browser is ready.")
@@ -70,6 +77,10 @@ def _clear_profile_locks() -> list[Path]:
         removed.append(path)
     return removed
 
+
+# Lock so only one Playwright browser runs at a time (browsers are heavy).
+_browser_lock = asyncio.Lock()
+
 # After login, Omnivox redirects to URLs containing these patterns
 LOGGED_IN_PATTERNS = [
     "/intr/",
@@ -85,6 +96,12 @@ LOGIN_PAGE_PATTERNS = [
     "/login",
     "Identification=True",
 ]
+
+# 2FA verification-code input selector.
+# IMPORTANT: verify this against the actual Omnivox 2FA page HTML and update if needed.
+# Open DevTools on the 2FA page and inspect the code input's id/name attribute.
+_OTP_INPUT_SELECTOR = "main input.MuiInputBase-input"
+_OTP_SUBMIT_SELECTOR = "main button.MuiButton-root[type=button]"
 
 
 def _is_logged_in(url: str) -> bool:
@@ -179,7 +196,9 @@ def load_auth_cookies() -> list[dict[str, Any]] | None:
 
 
 def save_auth_cookies(cookies: list[dict[str, Any]] | None) -> str:
-    normalized = [_normalized_cookie(cookie) for cookie in (cookies or []) if cookie.get("name")]
+    normalized = [
+        _normalized_cookie(cookie) for cookie in (cookies or []) if cookie.get("name")
+    ]
     AUTH_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     AUTH_STATE_FILE.write_text(
         json.dumps(normalized, indent=2, sort_keys=True) + "\n",
@@ -268,11 +287,15 @@ async def authenticate(
                 except Exception as retry_exc:
                     if not _is_profile_lock_error(retry_exc):
                         raise
-                    print("[auth] Persistent browser profile is still locked after cleanup; falling back to a temporary browser context.")
+                    print(
+                        "[auth] Persistent browser profile is still locked after cleanup; falling back to a temporary browser context."
+                    )
                     browser = await pw.chromium.launch(headless=False)
                     context = await browser.new_context()
             else:
-                print("[auth] Persistent browser profile is still locked; falling back to a temporary browser context.")
+                print(
+                    "[auth] Persistent browser profile is still locked; falling back to a temporary browser context."
+                )
                 browser = await pw.chromium.launch(headless=False)
                 context = await browser.new_context()
         if restore_saved_cookies:
@@ -347,6 +370,171 @@ async def authenticate(
 
     print(f"Saved to {AUTH_FILE} and {AUTH_STATE_FILE}")
 
+    return cookie_body
+
+
+async def authenticate_for_user(user_id: str, target_url: str | None = None) -> str:
+    """
+    Open a browser for the student to log in to Omnivox, capture their cookies,
+    and persist them to the per-user store (user_tokens.json).
+
+    This is the multi-tenant variant of `authenticate()`.  Only one browser
+    window is opened at a time thanks to _browser_lock.
+    """
+    # Import here to avoid circular imports at module load time.
+    from user_store import save_omnivox_cookies
+
+    async with _browser_lock:
+        cookies = await authenticate(target_url=target_url)
+
+    if cookies:
+        await save_omnivox_cookies(user_id, cookies)
+
+    return cookies
+
+
+async def authenticate_headless(
+    email: str,
+    password: str,
+    user_id: str,
+    otp_callback: Callable[[], Awaitable[str]] | None = None,
+    warm_urls: list[str] | None = None,
+) -> str:
+    """
+    Log in to Omnivox programmatically using *email* and *password*.
+
+    Runs a headless Chromium browser, fills the login form, submits it, and
+    waits for a post-login redirect.  If Omnivox presents a 2FA verification
+    step, *otp_callback* is awaited to obtain the code; it must be provided
+    when 2FA is expected, otherwise a RuntimeError is raised.
+
+    Captures and returns the session cookies, persisting them under *user_id*.
+
+    Raises RuntimeError if login fails (wrong credentials, 2FA timeout, etc.).
+    """
+    from user_store import save_omnivox_cookies
+
+    # Selectors for the JAC Omnivox login page (may need adjustment if Omnivox updates).
+    EMAIL_SELECTOR = "#Identifiant"
+    PASSWORD_SELECTOR = "#Password"
+    SUBMIT_SELECTOR = "#formLogin button[type=submit]"
+
+    cookie_body: str | None = None
+
+    async with _browser_lock:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            context = await browser.new_context()
+            page = await context.new_page()
+
+            captured_cookies: str | None = None
+
+            async def on_request(request: Request) -> None:
+                nonlocal captured_cookies
+                url = request.url.lower()
+                if "omnivox" in url and not _is_login_page(request.url):
+                    cb = _request_to_curl_b(request)
+                    if cb:
+                        captured_cookies = cb
+
+            page.on("request", on_request)
+
+            # Navigate to the login page.
+            await page.goto(OMNIVOX_LOGIN_URL, wait_until="domcontentloaded")
+
+            # Fill in credentials.
+            try:
+                await page.fill(EMAIL_SELECTOR, email)
+                await page.fill(PASSWORD_SELECTOR, password)
+                await page.click(SUBMIT_SELECTOR)
+                await asyncio.sleep(2)
+            except Exception as exc:
+                await browser.close()
+                raise RuntimeError(
+                    f"Could not interact with Omnivox login form: {exc}"
+                ) from exc
+
+            # Wait for the page to settle after credential submit.
+            try:
+                await page.wait_for_load_state("networkidle", timeout=9000)
+            except Exception:
+                pass  # Timeout is fine; we check the URL state below.
+
+            if not _is_logged_in(page.url):
+                if await page.query_selector(_OTP_INPUT_SELECTOR):
+                    # Omnivox presented a 2FA / verification-code step.
+                    if otp_callback is None:
+                        await browser.close()
+                        raise RuntimeError(
+                            "Omnivox requires a verification code but no callback was provided."
+                        )
+                    try:
+                        print("Waiting for 2FA code...")
+                        code = await otp_callback()
+                        print(f"2FA code: {code} tyoe: {type(code)}")
+                    except Exception:
+                        print("2FA code callback failed.")
+                        await browser.close()
+                        raise
+                    try:
+                        print(
+                            f"Submitting 2FA code...{code} {_OTP_INPUT_SELECTOR}, {_OTP_SUBMIT_SELECTOR}"
+                        )
+                        await page.fill(_OTP_INPUT_SELECTOR, code)
+                        # await asyncio.sleep(15)
+                        await page.click(_OTP_SUBMIT_SELECTOR)
+                    except Exception as exc:
+                        await browser.close()
+                        raise RuntimeError(
+                            f"Could not submit verification code: {exc}"
+                        ) from exc
+
+                    # Wait for login after 2FA (up to 15 s).
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=5000)
+                    except Exception:
+                        pass
+                    for _ in range(30):
+                        await asyncio.sleep(0.5)
+                        if _is_logged_in(page.url):
+                            break
+                    else:
+                        await browser.close()
+                        raise RuntimeError(
+                            "Omnivox 2FA verification failed or timed out."
+                        )
+                else:
+                    # Not logged in and no OTP field → wrong credentials.
+                    await browser.close()
+                    raise RuntimeError(
+                        "Omnivox login failed — check your student ID and password."
+                    )
+
+            # Navigate to each warm URL so module-specific session tokens are
+            # issued and captured in the browser context's cookie jar.
+            for warm_url in warm_urls or []:
+                try:
+                    await page.goto(
+                        warm_url, wait_until="domcontentloaded", timeout=10000
+                    )
+                    await asyncio.sleep(1)
+                except Exception as exc:
+                    print(f"[auth] Warning: could not warm {warm_url}: {exc}")
+
+            # Give a moment for post-login requests to fire so we capture cookies.
+            await asyncio.sleep(2)
+
+            # Fallback: pull cookies directly from the browser context.
+            all_cookies = await context.cookies()
+            context_cookie_str = _cookies_to_curl_b(all_cookies)
+            cookie_body = captured_cookies or context_cookie_str
+
+            await browser.close()
+
+    if not cookie_body:
+        raise RuntimeError("Omnivox login succeeded but no cookies were captured.")
+
+    await save_omnivox_cookies(user_id, cookie_body)
     return cookie_body
 
 
