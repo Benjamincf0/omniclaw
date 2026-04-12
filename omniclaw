@@ -147,12 +147,27 @@ def stream_output(prefix: str, pipe: TextIO) -> None:
 def terminate_process(process: subprocess.Popen[str]) -> None:
     if process.poll() is not None:
         return
-    process.terminate()
-    try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
+    if sys.platform == "win32":
+        # On Windows, terminate() only signals the lead process; child
+        # processes (like uvicorn workers) survive as orphans and keep
+        # their ports open.  Use taskkill /T to kill the whole tree.
+        subprocess.call(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+    else:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def run_up(env: dict[str, str], *, do_sync: bool) -> int:
