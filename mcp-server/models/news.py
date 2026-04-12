@@ -15,12 +15,7 @@ _SERVER_ROOT = Path(__file__).resolve().parent.parent
 if str(_SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVER_ROOT))
 
-from auth_manager import (  # noqa: E402
-    MfaCodeProvider,
-    authenticate,
-    load_auth,
-    validate_auth,
-)
+from auth_manager import authenticate, load_auth  # noqa: E402
 
 NEWS_LIST_URL_ENV = "NEWS_LIST_URL"
 NEWS_TOKEN_ENV = "NEWS_TOKEN"
@@ -121,11 +116,10 @@ _LOGIN_PATTERNS = ("/login", "identification=true")
 def _is_auth_redirect(response: httpx.Response) -> bool:
     if response.status_code in (401, 403):
         return True
-    location = response.headers.get("location", "").lower()
-    if any(pat in location for pat in _LOGIN_PATTERNS):
-        return True
-    body = response.text.lower()
-    return any(pat in body for pat in _LOGIN_PATTERNS)
+    if response.status_code in (301, 302, 303, 307, 308):
+        location = response.headers.get("location", "").lower()
+        return any(pat in location for pat in _LOGIN_PATTERNS)
+    return False
 
 
 async def _ensure_news_token(target_url: str | None = None) -> str:
@@ -323,15 +317,10 @@ def _extract_content(root: Tag | BeautifulSoup, selector: str | None) -> str:
     return "\n\n".join(blocks)
 
 
-async def get_all_news(
-    req: AllNewsReq,
-    mfa_code_provider: MfaCodeProvider | None = None,
-) -> AllNewsRes:
+async def get_all_news(req: AllNewsReq) -> AllNewsRes:
     del req
     config = _load_config()
-    html = await _fetch_html(
-        config.list_url, config, mfa_code_provider=mfa_code_provider
-    )
+    html = await _fetch_html(config.list_url, config)
     return AllNewsRes(
         news_links=_extract_news_links(
             html, base_url=config.list_url, selector=config.link_selector
@@ -339,14 +328,9 @@ async def get_all_news(
     )
 
 
-async def get_news(
-    req: NewsReq,
-    mfa_code_provider: MfaCodeProvider | None = None,
-) -> NewsRes:
+async def get_news(req: NewsReq) -> NewsRes:
     config = _load_config()
-    html = await _fetch_html(
-        req.link, config, mfa_code_provider=mfa_code_provider
-    )
+    html = await _fetch_html(req.link, config)
     soup = BeautifulSoup(html, "html.parser")
     container = _find_matching_news_container(
         soup, _extract_requested_news_id(req.link)

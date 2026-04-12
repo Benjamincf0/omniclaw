@@ -1,51 +1,38 @@
 """
 Authenticated HTTP client for Omnivox.
 
-Checks auth.txt upfront: if missing or expired, launches the Playwright
-browser login *before* making any real request.
+Handles cookie-based auth with automatic re-authentication via browser popup
+when the session expires or is missing.
 """
 
 import httpx
-from auth_manager import (
-    LOGIN_PAGE_PATTERNS,
-    MfaCodeProvider,
-    authenticate,
-    load_auth,
-    validate_auth,
-)
+from auth_manager import load_auth, authenticate, LOGIN_PAGE_PATTERNS
 
 OMNIVOX_BASE = "https://johnabbott.omnivox.ca"
 
 
 def _is_auth_failure(response: httpx.Response) -> bool:
+    """Detect if a response indicates the session has expired or is invalid."""
     if response.status_code in (401, 403):
         return True
-    location = response.headers.get("location", "").lower()
-    if any(pat.lower() in location for pat in LOGIN_PAGE_PATTERNS):
-        return True
-    body = response.text.lower()
-    return any(pat.lower() in body for pat in LOGIN_PAGE_PATTERNS)
+    if response.status_code in (301, 302, 303, 307, 308):
+        location = response.headers.get("location", "")
+        if any(pat.lower() in location.lower() for pat in LOGIN_PAGE_PATTERNS):
+            return True
+    return False
 
 
-async def ensure_authenticated(
-    mfa_code_provider: MfaCodeProvider | None = None,
-) -> str:
-    """
-    Return valid cookies.  Checks auth.txt -> validates with a test request ->
-    launches Playwright browser login if missing or expired.
-    """
+async def ensure_authenticated() -> str:
+    """Return valid cookies, prompting browser login if none are stored."""
     cookies = load_auth()
-    if cookies and await validate_auth(cookies):
+    if cookies:
         return cookies
-
-    return await authenticate(mfa_code_provider=mfa_code_provider)
+    return await authenticate()
 
 
 async def omnivox_request(
     path: str,
     method: str = "GET",
-    *,
-    mfa_code_provider: MfaCodeProvider | None = None,
     **kwargs,
 ) -> httpx.Response:
     """
@@ -55,7 +42,7 @@ async def omnivox_request(
     opens a browser popup for the user to re-login, then retries once.
     """
     url = f"{OMNIVOX_BASE}{path}"
-    cookies_str = await ensure_authenticated(mfa_code_provider=mfa_code_provider)
+    cookies_str = await ensure_authenticated()
     if not cookies_str:
         raise RuntimeError("Authentication failed — no cookies obtained")
 
@@ -68,7 +55,7 @@ async def omnivox_request(
         )
 
         if _is_auth_failure(resp):
-            cookies_str = await authenticate(target_url=url, mfa_code_provider=mfa_code_provider)
+            cookies_str = await authenticate(target_url=url)
             if not cookies_str:
                 raise RuntimeError("Re-authentication failed")
             headers["Cookie"] = cookies_str

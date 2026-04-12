@@ -1,17 +1,14 @@
-import logging
 import asyncio
 import os
 
-from fastmcp import Context, FastMCP
-from starlette.requests import Request
-from starlette.responses import JSONResponse
+from fastmcp import FastMCP
 
-from auth_manager import MfaCodeProvider
 from models.mio import AllMiosReq, AllMiosRes, MioReq, MioRes, get_all_mios
 from models.mio import get_mio as fetch_mio
 from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
 from models.news import get_news as fetch_news
 from omnivox_client import omnivox_request
+
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
@@ -20,11 +17,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from dotenv import load_dotenv
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
-log = logging.getLogger("omniclaw")
 # Load environment variables 
 load_dotenv()
 # Anyone connecting must send: Authorization: Bearer my-secret-token
@@ -37,30 +29,11 @@ load_dotenv()
 #     }
 # )
 
+# Initialize FastMCP server
 mcp = FastMCP("omniclaw")
 
+# Constants
 host = os.environ.get("MCP_HOST") or "localhost"
-
-
-def _mfa_provider_from_ctx(ctx: Context) -> MfaCodeProvider:
-    """Build an async MFA-code provider that asks the MCP client via elicitation."""
-
-    async def _ask() -> str:
-        result = await ctx.elicit(
-            "Omnivox requires a 2FA verification code. "
-            "Please enter the code sent to your device:",
-            response_type=str,
-        )
-        if result.action != "accept" or not result.data:
-            raise RuntimeError("2FA code not provided — authentication cancelled")
-        return result.data.strip()
-
-    return _ask
-
-
-@mcp.custom_route("/health", methods=["GET"])
-async def health(request: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok"})
 
 
 @mcp.tool()
@@ -80,33 +53,31 @@ async def get_mio_item(link: str) -> MioRes:
 
 
 @mcp.tool()
-async def send_mio(subject: str, message: str, ctx: Context) -> str:
+async def send_mio(subject: str, message: str) -> str:
     """Send an MIO through a student's Omnivox."""
+    # TODO: replace with actual Omnivox send endpoint + proper form fields
     resp = await omnivox_request(
         "/intr/Module/MessagerieEleve/Envoyer.aspx",
         method="POST",
-        mfa_code_provider=_mfa_provider_from_ctx(ctx),
         data={"subject": subject, "message": message},
     )
     return resp.text
 
 
 @mcp.tool()
-async def get_news(num: int = 10, ctx: Context = None) -> AllNewsRes:
+async def get_news(num: int = 10) -> AllNewsRes:
     """get the latest student news"""
     if num < 1:
         raise ValueError("num must be at least 1")
 
-    provider = _mfa_provider_from_ctx(ctx) if ctx else None
-    news = await get_all_news(AllNewsReq(), mfa_code_provider=provider)
+    news = await get_all_news(AllNewsReq())
     return AllNewsRes(news_links=news.news_links[:num])
 
 
 @mcp.tool()
-async def get_news_item(link: str, ctx: Context = None) -> NewsRes:
+async def get_news_item(link: str) -> NewsRes:
     """get the contents of a single student news post"""
-    provider = _mfa_provider_from_ctx(ctx) if ctx else None
-    return await fetch_news(NewsReq(link=link), mfa_code_provider=provider)
+    return await fetch_news(NewsReq(link=link))
 
 
 
@@ -301,19 +272,13 @@ async def health():
 
 
 def main():
-    app = mcp.http_app(transport="http")
-    routes = getattr(app, "routes", [])
-    log.info("=== Registered routes ===")
-    for r in routes:
-        methods = getattr(r, "methods", "ALL")
-        path = getattr(r, "path", "???")
-        log.info(f"  {methods} {path}")
-    log.info("=========================")
     # run the server
     # mcp.run(transport="http", host="0.0.0.0", port=8000) # turn on MCP server to use the external AI clients 
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False) # run FastAPI server for the frontend to connect to
 
+
     # mcp.run(transport="http", host=host, port=8000)
+
 
 if __name__ == "__main__":
     main()
