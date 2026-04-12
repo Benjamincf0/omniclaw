@@ -70,10 +70,10 @@ if (-not $SkipFrontend) {
 Write-Step "Bundling with PyInstaller"
 Push-Location $Server
 try {
-    pip install pyinstaller --quiet
+    python -m pip install pyinstaller --quiet
     if ($LASTEXITCODE -ne 0) { throw "pip install pyinstaller failed" }
 
-    pyinstaller omniclaw.spec --noconfirm --clean
+    python -m PyInstaller omniclaw.spec --noconfirm --clean
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
 } finally {
     Pop-Location
