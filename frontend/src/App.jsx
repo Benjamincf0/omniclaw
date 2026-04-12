@@ -56,11 +56,17 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen max-w-2xl mx-auto">
+    <div
+      className="flex flex-col h-screen max-w-2xl mx-auto"
+      style={{
+        backgroundColor: "var(--bg-card)",
+        boxShadow: "0 0 0 1px var(--border), 0 8px 48px rgba(28,43,74,0.10)",
+      }}
+    >
       <Header />
 
       {/* Message area */}
-      <div className="flex-1 overflow-y-auto py-4">
+      <div className="flex-1 overflow-y-auto py-4" style={{ backgroundColor: "var(--bg-warm)" }}>
         {!hasMessages && (
           <div className="flex flex-col gap-6">
             <WelcomeScreen />

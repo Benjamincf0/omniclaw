@@ -1,10 +1,27 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400&display=swap');
+
+:root {
+  --bg-parchment: #EDE8DC;
+  --bg-warm: #F5F0E6;
+  --bg-card: #FDFAF5;
+  --navy: #1C2B4A;
+  --navy-light: #2C3E6A;
+  --navy-muted: #4A5A7A;
+  --amber: #B07830;
+  --amber-light: #C8922A;
+  --border: #D4CCB8;
+  --border-light: #E8E2D4;
+  --text-primary: #1C1C2A;
+  --text-secondary: #5A5470;
+  --text-muted: #8A8298;
+}
 
 body {
   margin: 0;
-  background-color: #0f0f11;
-  color: #e8e8f0;
-  font-family: "Inter", system-ui, sans-serif;
+  background-color: var(--bg-parchment);
+  color: var(--text-primary);
+  font-family: 'Source Serif 4', Georgia, serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -22,7 +39,7 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a2a32;
+  background: var(--border);
   border-radius: 4px;
 }
 
@@ -30,4 +47,13 @@ body {
 .prose p:last-child { margin: 0; }
 .prose ul { margin: 0.25rem 0; padding-left: 1.25rem; }
 .prose li { margin: 0.15rem 0; }
-.prose strong { color: #e8e8f0; }
+.prose strong { color: var(--navy); font-weight: 600; }
+.prose code {
+  background: var(--bg-parchment);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.85em;
+  font-family: 'Fira Code', monospace;
+  color: var(--navy);
+}
