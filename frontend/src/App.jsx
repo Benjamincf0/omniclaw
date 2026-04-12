@@ -5,6 +5,7 @@ import TypingIndicator from "./components/TypingIndicator"
 import ChatInput from "./components/ChatInput"
 import QuickChips from "./components/QuickChips"
 import WelcomeScreen from "./components/WelcomeScreen"
+import SettingsModal from "./components/SettingsModal"
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080"
 
@@ -22,6 +23,7 @@ async function fetchReply(message, history) {
 export default function App() {
   const [messages, setMessages] = useState([])
   const [isTyping, setIsTyping] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const bottomRef = useRef(null)
 
   const hasMessages = messages.length > 0
@@ -57,7 +59,8 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen max-w-2xl mx-auto">
-      <Header />
+      <Header onSettingsClick={() => setShowSettings(true)} />
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
 
       {/* Message area */}
       <div className="flex-1 overflow-y-auto py-4">

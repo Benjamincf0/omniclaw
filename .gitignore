@@ -1,3 +1,11 @@
+mcp-server/.env
+
+# Build artifacts
+mcp-server/static/
+mcp-server/build/
+mcp-server/dist/
+installer/Output/
+installer/OllamaSetup.exe
 
 # Python-generated files
 __pycache__/
@@ -14,4 +22,5 @@ wheels/
 auth.txt
 
 .env*
+*.env
 !.env.example

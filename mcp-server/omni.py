@@ -1,6 +1,9 @@
 import asyncio
 import os
+import sys
 from functools import lru_cache
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastmcp import FastMCP
 
@@ -9,12 +12,15 @@ from models.mio import get_mio as fetch_mio
 from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
 from models.news import get_news as fetch_news
 from omnivox_client import omnivox_request
+from auth_manager import load_auth
 
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import uvicorn
 from dotenv import load_dotenv
 
@@ -251,7 +257,7 @@ async def run_chat(message: str, history: list[dict]) -> str:
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 mcp_http_app = mcp.http_app(
-    path=MCP_TRANSPORT_PATH,
+    path="/",
     transport="streamable-http",
 )
 
@@ -302,7 +308,115 @@ async def health():
     }
 
 
-app.mount("/", mcp_http_app)
+# ── Settings API ─────────────────────────────────────────────────────────────
+
+def _config_path() -> Path:
+    """Writable config file next to the executable (survives restarts)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "omniclaw.env"
+    return Path(__file__).resolve().parent / "omniclaw.env"
+
+
+def _read_persistent_config() -> dict[str, str]:
+    path = _config_path()
+    config: dict[str, str] = {}
+    if not path.exists():
+        return config
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if sep:
+            config[key.strip()] = value.strip()
+    return config
+
+
+def _write_persistent_config(config: dict[str, str]) -> None:
+    lines = [f"{k}={v}" for k, v in config.items() if v]
+    _config_path().write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _mask(value: str) -> str:
+    if len(value) <= 8:
+        return "\u2022" * 8
+    return value[:4] + "\u2022\u2022\u2022\u2022" + value[-4:]
+
+
+SETTINGS_SCHEMA: list[dict] = [
+    {"key": "OMNIVOX_ID",        "label": "Omnivox Student ID",  "secret": False, "group": "Omnivox"},
+    {"key": "OMNIVOX_PASSWORD",  "label": "Omnivox Password",    "secret": True,  "group": "Omnivox"},
+    {"key": "GEMINI_API_KEY",    "label": "Gemini API Key",      "secret": True,  "group": "Chat AI"},
+    {"key": "MODEL_PROVIDER",    "label": "Model Provider",      "secret": False, "group": "Orchestrator",
+     "type": "select", "options": ["openai", "ollama", "claude", "gemini"]},
+    {"key": "OPENAI_API_KEY",    "label": "OpenAI API Key",      "secret": True,  "group": "Orchestrator"},
+    {"key": "OPENAI_MODEL",      "label": "OpenAI Model",        "secret": False, "group": "Orchestrator"},
+    {"key": "ANTHROPIC_API_KEY", "label": "Anthropic API Key",   "secret": True,  "group": "Orchestrator"},
+    {"key": "ANTHROPIC_MODEL",   "label": "Anthropic Model",     "secret": False, "group": "Orchestrator"},
+    {"key": "GEMINI_MODEL",      "label": "Gemini Model",        "secret": False, "group": "Orchestrator"},
+    {"key": "OLLAMA_MODEL",      "label": "Ollama Model",        "secret": False, "group": "Orchestrator"},
+    {"key": "OLLAMA_BASE_URL",   "label": "Ollama Base URL",     "secret": False, "group": "Orchestrator"},
+    {"key": "DISCORD_BOT_TOKEN", "label": "Discord Bot Token",   "secret": True,  "group": "Discord"},
+]
+
+_SCHEMA_KEYS = {f["key"] for f in SETTINGS_SCHEMA}
+_SECRET_KEYS = {f["key"] for f in SETTINGS_SCHEMA if f["secret"]}
+
+
+@app.get("/api/settings")
+async def get_settings():
+    fields = []
+    for field in SETTINGS_SCHEMA:
+        raw = os.environ.get(field["key"], "")
+        entry = {
+            "key": field["key"],
+            "label": field["label"],
+            "secret": field["secret"],
+            "group": field["group"],
+            "value": _mask(raw) if (field["secret"] and raw) else raw,
+            "is_set": bool(raw),
+        }
+        if "type" in field:
+            entry["type"] = field["type"]
+        if "options" in field:
+            entry["options"] = field["options"]
+        fields.append(entry)
+    return {"fields": fields, "config_path": str(_config_path())}
+
+
+class SettingsUpdate(BaseModel):
+    settings: dict[str, str]
+
+
+@app.post("/api/settings")
+async def save_settings(body: SettingsUpdate):
+    config = _read_persistent_config()
+
+    for key, value in body.settings.items():
+        if key not in _SCHEMA_KEYS:
+            continue
+        value = value.strip()
+        if key in _SECRET_KEYS and not value:
+            continue
+        if value:
+            config[key] = value
+            os.environ[key] = value
+        else:
+            config.pop(key, None)
+            os.environ.pop(key, None)
+
+    _write_persistent_config(config)
+    _get_gemini_client.cache_clear()
+    return {"status": "ok"}
+
+
+app.mount(MCP_TRANSPORT_PATH, mcp_http_app)
+
+# ── Static frontend serving ──────────────────────────────────────────────────
+
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.is_dir():
+    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="static")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

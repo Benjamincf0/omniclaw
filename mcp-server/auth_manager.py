@@ -1,10 +1,30 @@
 import asyncio
+import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright, Request
 
 OMNIVOX_URL = "https://johnabbott.omnivox.ca"
 AUTH_FILE = Path(__file__).parent / "auth.txt"
+
+
+def _ensure_browsers_installed() -> None:
+    """Install Playwright's Chromium browser if not already present."""
+    try:
+        from playwright._impl._driver import compute_driver_executable
+        driver_exe, driver_cli = compute_driver_executable()
+        result = subprocess.run(
+            [str(driver_exe), str(driver_cli), "install", "chromium"],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode == 0:
+            print("[auth] Playwright Chromium browser is ready.")
+        else:
+            print(f"[auth] Playwright browser install warning: {result.stderr.strip()}")
+    except Exception as exc:
+        print(f"[auth] Could not auto-install Playwright browsers: {exc}")
+        print("[auth] Run 'playwright install chromium' manually if login fails.")
 
 # After login, Omnivox redirects to URLs containing these patterns
 LOGGED_IN_PATTERNS = [
@@ -63,6 +83,8 @@ async def authenticate(target_url: str | None = None) -> str:
     """
     target = target_url or OMNIVOX_URL
     module_hint = _module_hint(target)
+
+    _ensure_browsers_installed()
 
     print(f"Opening Omnivox login page: {target}")
     print("Please log in with your credentials. The window will close automatically.\n")
