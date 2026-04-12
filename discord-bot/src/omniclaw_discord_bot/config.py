@@ -31,6 +31,7 @@ class DiscordBotConfig:
     require_mention: bool
     allow_dms: bool
     auto_reply_channel_ids: set[int]
+    command_guild_ids: set[int]
     reply_char_limit: int
     http_timeout_seconds: float
 
@@ -48,6 +49,7 @@ def load_config() -> DiscordBotConfig:
         require_mention=_parse_bool("DISCORD_REQUIRE_MENTION", True),
         allow_dms=_parse_bool("DISCORD_ALLOW_DMS", True),
         auto_reply_channel_ids=_parse_int_set("DISCORD_CHANNEL_IDS"),
+        command_guild_ids=_parse_int_set("DISCORD_COMMAND_GUILD_IDS"),
         reply_char_limit=max(200, int(os.getenv("DISCORD_REPLY_CHAR_LIMIT", "1900"))),
         http_timeout_seconds=float(os.getenv("DISCORD_HTTP_TIMEOUT_SECONDS", "90")),
     )
