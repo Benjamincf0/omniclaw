@@ -1,5 +1,6 @@
 import asyncio
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -7,8 +8,17 @@ from typing import Any
 from urllib.parse import urlparse
 
 OMNIVOX_URL = "https://johnabbott.omnivox.ca"
-AUTH_FILE = Path(__file__).parent / "auth.txt"
-AUTH_STATE_FILE = Path(__file__).parent / "auth_state.json"
+
+
+def _storage_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent
+
+
+AUTH_FILE = _storage_dir() / "auth.txt"
+AUTH_STATE_FILE = _storage_dir() / "auth_state.json"
+PLAYWRIGHT_PROFILE_DIR = _storage_dir() / "omnivox-browser-profile"
 
 
 def _ensure_browsers_installed() -> None:
@@ -27,6 +37,20 @@ def _ensure_browsers_installed() -> None:
     except Exception as exc:
         print(f"[auth] Could not auto-install Playwright browsers: {exc}")
         print("[auth] Run 'playwright install chromium' manually if login fails.")
+
+
+def clear_auth_state(*, include_profile: bool = False) -> list[Path]:
+    removed: list[Path] = []
+    for path in (AUTH_FILE, AUTH_STATE_FILE):
+        if path.exists():
+            path.unlink()
+            removed.append(path)
+
+    if include_profile and PLAYWRIGHT_PROFILE_DIR.exists():
+        shutil.rmtree(PLAYWRIGHT_PROFILE_DIR)
+        removed.append(PLAYWRIGHT_PROFILE_DIR)
+
+    return removed
 
 # After login, Omnivox redirects to URLs containing these patterns
 LOGGED_IN_PATTERNS = [
@@ -138,6 +162,7 @@ def load_auth_cookies() -> list[dict[str, Any]] | None:
 
 def save_auth_cookies(cookies: list[dict[str, Any]] | None) -> str:
     normalized = [_normalized_cookie(cookie) for cookie in (cookies or []) if cookie.get("name")]
+    AUTH_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     AUTH_STATE_FILE.write_text(
         json.dumps(normalized, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -180,12 +205,16 @@ async def authenticate(target_url: str | None = None) -> str:
 
     print(f"Opening Omnivox login page: {target}")
     print("Please log in with your credentials. The window will close automatically.\n")
+    print(f"Using persistent browser profile: {PLAYWRIGHT_PROFILE_DIR}")
 
     cookie_body: str | None = None
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=False)
-        context = await browser.new_context()
+        PLAYWRIGHT_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        context = await pw.chromium.launch_persistent_context(
+            str(PLAYWRIGHT_PROFILE_DIR),
+            headless=False,
+        )
         existing_cookies = load_auth_cookies()
         if existing_cookies:
             try:
@@ -241,12 +270,12 @@ async def authenticate(target_url: str | None = None) -> str:
 
         if not cookie_body:
             print("WARNING: No cookies captured. Authentication may have failed.")
-            await browser.close()
+            await context.close()
             return ""
 
         print(f"\nCaptured cookie body ({len(cookie_body)} chars)")
 
-        await browser.close()
+        await context.close()
 
     print(f"Saved to {AUTH_FILE} and {AUTH_STATE_FILE}")
 

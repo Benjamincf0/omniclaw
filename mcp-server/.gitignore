@@ -12,5 +12,6 @@ wheels/
 # Auth credentials
 auth.txt
 auth_state.json
+omnivox-browser-profile
 
 .env

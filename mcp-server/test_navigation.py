@@ -57,11 +57,7 @@ def _html_title(html: str) -> str | None:
 
 
 def _clear_saved_auth() -> None:
-    removed: list[Path] = []
-    for path in (auth_manager.AUTH_FILE, auth_manager.AUTH_STATE_FILE):
-        if path.exists():
-            path.unlink()
-            removed.append(path)
+    removed = auth_manager.clear_auth_state(include_profile=True)
 
     if removed:
         print("Removed saved auth state:")
