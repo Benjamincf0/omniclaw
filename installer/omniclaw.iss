@@ -125,6 +125,27 @@ begin
   end;
 end;
 
+procedure InstallPlaywrightBrowsers;
+var
+  ResultCode: Integer;
+  DriverPath: String;
+  DriverCli: String;
+begin
+  DriverPath := ExpandConstant('{app}\_internal\playwright\driver\node.exe');
+  DriverCli  := ExpandConstant('{app}\_internal\playwright\driver\package\cli.js');
+  if FileExists(DriverPath) and FileExists(DriverCli) then
+  begin
+    Exec(DriverPath, '"' + DriverCli + '" install chromium',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    if ResultCode = 0 then
+      Log('Playwright Chromium installed successfully')
+    else
+      Log('Playwright Chromium install exited with code ' + IntToStr(ResultCode));
+  end
+  else
+    Log('Playwright driver not found — browsers will be installed on first launch');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
@@ -133,5 +154,6 @@ begin
     begin
       DownloadAndInstallOllama;
     end;
+    InstallPlaywrightBrowsers;
   end;
 end;

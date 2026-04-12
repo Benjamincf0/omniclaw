@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Build the Omniclaw Windows installer end-to-end.
@@ -43,7 +43,7 @@ $Installer    = Join-Path $Root "installer"
 
 function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 
-# ── 1. Sync all services ────────────────────────────────────────────────────
+# -- 1. Sync all services ----------------------------------------------------
 
 if (-not $SkipSync) {
     foreach ($svc in @(
@@ -51,7 +51,7 @@ if (-not $SkipSync) {
         @{ Name = "orchestrator"; Path = $Orchestrator },
         @{ Name = "discord-bot";  Path = $DiscordBot }
     )) {
-        Write-Step "uv sync — $($svc.Name)"
+        Write-Step "uv sync - $($svc.Name)"
         Push-Location $svc.Path
         try {
             uv sync
@@ -64,7 +64,7 @@ if (-not $SkipSync) {
     Write-Host "Skipping uv sync (--SkipSync)" -ForegroundColor Yellow
 }
 
-# ── 2. Build frontend ───────────────────────────────────────────────────────
+# -- 2. Build frontend -------------------------------------------------------
 
 if (-not $SkipFrontend) {
     Write-Step "Building React frontend"
@@ -94,7 +94,7 @@ if (-not $SkipFrontend) {
     }
 }
 
-# ── 3. Install combined Python deps for PyInstaller ─────────────────────────
+# -- 3. Install combined Python deps for PyInstaller -------------------------
 
 Write-Step "Installing Python dependencies for PyInstaller"
 Push-Location $Server
@@ -114,14 +114,15 @@ try {
         python-dotenv `
         pydantic `
         "discord.py" `
-        aiohttp
+        aiohttp `
+        playwright
 
     if ($LASTEXITCODE -ne 0) { throw "pip install of combined deps failed" }
 } finally {
     Pop-Location
 }
 
-# ── 4. PyInstaller bundle ───────────────────────────────────────────────────
+# -- 4. PyInstaller bundle ---------------------------------------------------
 
 Write-Step "Bundling with PyInstaller (MCP + orchestrator + Discord bot)"
 Push-Location $Server
@@ -138,7 +139,7 @@ if (-not (Test-Path $DistDir)) {
 }
 Write-Host "PyInstaller bundle ready at $DistDir" -ForegroundColor Green
 
-# ── 5. Download Ollama installer (optional) ─────────────────────────────────
+# -- 5. Download Ollama installer (optional) ---------------------------------
 
 $OllamaSetup = Join-Path $Installer "OllamaSetup.exe"
 if (-not $SkipOllamaDownload) {
@@ -155,7 +156,7 @@ if (-not $SkipOllamaDownload) {
     Write-Host "Skipping Ollama download (--SkipOllamaDownload)" -ForegroundColor Yellow
 }
 
-# ── 6. Compile Inno Setup installer ─────────────────────────────────────────
+# -- 6. Compile Inno Setup installer -----------------------------------------
 
 Write-Step "Compiling Inno Setup installer"
 

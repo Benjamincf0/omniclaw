@@ -11,7 +11,7 @@ from models.mio import get_mio as fetch_mio
 from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
 from models.news import get_news as fetch_news
 from omnivox_client import omnivox_request
-from auth_manager import auth_manager, load_auth, AuthState
+from auth_manager import load_auth
 
 from google import genai
 from google.genai import types

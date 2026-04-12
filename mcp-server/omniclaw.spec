@@ -10,6 +10,7 @@ Output:      dist/omniclaw/omniclaw.exe
 """
 
 import os
+import sys
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 
@@ -20,6 +21,23 @@ def _collect(pkg):
         return d, b, h
     except Exception:
         return [], [], []
+
+
+def _playwright_driver_datas():
+    """
+    Playwright ships a native driver binary inside the package that PyInstaller's
+    collect_all misses.  Locate it and add it to datas so the subprocess can find
+    it at runtime inside the bundle.
+    """
+    try:
+        import playwright
+        pkg_dir = os.path.dirname(playwright.__file__)
+        driver_dir = os.path.join(pkg_dir, "driver")
+        if os.path.isdir(driver_dir):
+            return [(driver_dir, os.path.join("playwright", "driver"))]
+    except Exception:
+        pass
+    return []
 
 
 block_cipher = None
@@ -68,7 +86,7 @@ a = Analysis(
          "omniclaw_orchestrator"),
         (os.path.join("..", "discord-bot", "src", "omniclaw_discord_bot"),
          "omniclaw_discord_bot"),
-    ] + _all_datas,
+    ] + _all_datas + _playwright_driver_datas(),
     hiddenimports=[
         # local app modules (not auto-discoverable by static analysis)
         "omni",
