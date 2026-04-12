@@ -1,0 +1,13 @@
+[project]
+name = "omniclaw-discord-bot"
+version = "0.1.0"
+description = "Discord bot for Omniclaw orchestrator"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "discord.py>=2.5.0",
+    "httpx>=0.28.0",
+]
+
+[project.scripts]
+omniclaw-discord-bot = "omniclaw_discord_bot.main:main"
