@@ -11,6 +11,19 @@ from models.calendar import AllCalendarEventsReq, AllCalendarEventsRes
 from models.calendar import get_calendar_events as fetch_calendar_events
 from models.lea_classes import AllLeaClassesReq, AllLeaClassesRes
 from models.lea_classes import get_lea_classes as fetch_lea_classes
+from models.lea_details import (
+    LeaAssignmentContentRes,
+    LeaAnnouncementRes,
+    LeaAssignmentsRes,
+    LeaDocumentsRes,
+    LeaGradesRes,
+    LeaLinkReq,
+)
+from models.lea_details import get_lea_assignment_content as fetch_lea_assignment_content
+from models.lea_details import get_lea_announcement as fetch_lea_announcement
+from models.lea_details import get_lea_assignments as fetch_lea_assignments
+from models.lea_details import get_lea_documents as fetch_lea_documents
+from models.lea_details import get_lea_grades as fetch_lea_grades
 from models.mio import AllMiosReq, AllMiosRes, MioReq, MioRes, get_all_mios
 from models.mio import get_mio as fetch_mio
 from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
@@ -119,6 +132,36 @@ async def get_lea_classes(num: int = 10) -> AllLeaClassesRes:
     return AllLeaClassesRes(classes=classes.classes[:num])
 
 
+@mcp.tool()
+async def get_lea_documents(link: str) -> LeaDocumentsRes:
+    """Fetch the documents and videos page for a LEA class using the section URL from get_lea_classes."""
+    return await fetch_lea_documents(LeaLinkReq(link=link))
+
+
+@mcp.tool()
+async def get_lea_assignments(link: str) -> LeaAssignmentsRes:
+    """Fetch the assignments page for a LEA class using the section URL from get_lea_classes."""
+    return await fetch_lea_assignments(LeaLinkReq(link=link))
+
+
+@mcp.tool()
+async def get_lea_assignment_content(link: str) -> LeaAssignmentContentRes:
+    """Fetch one LEA assignment detail/submission page using an assignment link from get_lea_assignments."""
+    return await fetch_lea_assignment_content(LeaLinkReq(link=link))
+
+
+@mcp.tool()
+async def get_lea_grades(link: str) -> LeaGradesRes:
+    """Fetch the detailed evaluation grades page for a LEA class using the section URL from get_lea_classes."""
+    return await fetch_lea_grades(LeaLinkReq(link=link))
+
+
+@mcp.tool()
+async def get_lea_announcement(link: str) -> LeaAnnouncementRes:
+    """Fetch a LEA class announcement using an announcement URL returned by get_lea_classes."""
+    return await fetch_lea_announcement(LeaLinkReq(link=link))
+
+
 
 
 
@@ -133,6 +176,11 @@ TOOL_HANDLERS = {
     "get_news_item": get_news_item,
     "get_calendar_events": get_calendar_events,
     "get_lea_classes": get_lea_classes,
+    "get_lea_documents": get_lea_documents,
+    "get_lea_assignments": get_lea_assignments,
+    "get_lea_assignment_content": get_lea_assignment_content,
+    "get_lea_grades": get_lea_grades,
+    "get_lea_announcement": get_lea_announcement,
 }
 
 GEMINI_TOOLS = [
@@ -210,6 +258,76 @@ GEMINI_TOOLS = [
                             description="How many classes to fetch (default 10).",
                         ),
                     },
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_documents",
+                description="Fetch the documents and videos page for a LEA class using the section URL returned by get_lea_classes.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "link": types.Schema(
+                            type=types.Type.STRING,
+                            description="The documents/videos page URL from get_lea_classes.",
+                        ),
+                    },
+                    required=["link"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_assignments",
+                description="Fetch the assignments list page for a LEA class using the section URL returned by get_lea_classes.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "link": types.Schema(
+                            type=types.Type.STRING,
+                            description="The assignments page URL from get_lea_classes.",
+                        ),
+                    },
+                    required=["link"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_assignment_content",
+                description="Fetch one LEA assignment detail/submission page using an assignment link returned by get_lea_assignments.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "link": types.Schema(
+                            type=types.Type.STRING,
+                            description="The assignment detail URL from get_lea_assignments.",
+                        ),
+                    },
+                    required=["link"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_grades",
+                description="Fetch the detailed evaluation grades page for a LEA class using the section URL returned by get_lea_classes.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "link": types.Schema(
+                            type=types.Type.STRING,
+                            description="The grades page URL from get_lea_classes.",
+                        ),
+                    },
+                    required=["link"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_announcement",
+                description="Fetch one full LEA announcement using an announcement URL returned by get_lea_classes.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "link": types.Schema(
+                            type=types.Type.STRING,
+                            description="The announcement URL from get_lea_classes.",
+                        ),
+                    },
+                    required=["link"],
                 ),
             ),
         ]
@@ -317,7 +435,7 @@ async def run_chat(message: str, history: list[dict]) -> str:
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 mcp_http_app = mcp.http_app(
-    path="/",
+    path=MCP_TRANSPORT_PATH,
     transport="streamable-http",
 )
 
@@ -470,7 +588,8 @@ async def save_settings(body: SettingsUpdate):
     return {"status": "ok"}
 
 
-app.mount(MCP_TRANSPORT_PATH, mcp_http_app)
+for _route in mcp_http_app.routes:
+    app.router.routes.append(_route)
 
 # ── Static frontend serving ──────────────────────────────────────────────────
 

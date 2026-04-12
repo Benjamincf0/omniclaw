@@ -12,7 +12,24 @@ export default function QuickChips({ onSelect }) {
         <button
           key={label}
           onClick={() => onSelect(label)}
-          className="text-sm bg-[#1a1a1f] border border-[#2a2a32] hover:border-[#6c63ff]/50 hover:bg-[#6c63ff]/5 text-[#a0a0b0] hover:text-[#e8e8f0] px-4 py-2 rounded-full transition-all duration-150 cursor-pointer"
+          className="text-sm px-4 py-2 rounded-full transition-all duration-150 cursor-pointer"
+          style={{
+            backgroundColor: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            color: "var(--navy-muted)",
+            fontFamily: "'Source Serif 4', serif",
+            fontSize: "0.8125rem",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = "var(--navy)"
+            e.currentTarget.style.color = "#EDE8DC"
+            e.currentTarget.style.borderColor = "var(--navy)"
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = "var(--bg-card)"
+            e.currentTarget.style.color = "var(--navy-muted)"
+            e.currentTarget.style.borderColor = "var(--border)"
+          }}
         >
           {label}
         </button>
