@@ -232,17 +232,7 @@ async def run_chat(message: str, history: list[dict]) -> str:
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    if load_auth():
-        auth_manager.state = AuthState.AUTHENTICATED
-    else:
-        asyncio.create_task(auth_manager.authenticate())
-    yield
-
-
-app = FastAPI(title="Omniclaw API", lifespan=lifespan)
+app = FastAPI(title="Omniclaw API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -250,27 +240,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# ── Auth endpoints ────────────────────────────────────────────────────────────
-
-
-class MfaRequest(BaseModel):
-    code: str
-
-
-@app.get("/auth/status")
-async def auth_status():
-    return auth_manager.get_status()
-
-
-@app.post("/auth/mfa")
-async def auth_mfa(body: MfaRequest):
-    result = await auth_manager.submit_mfa_code(body.code)
-    return result
-
-
-# ── Chat endpoints ────────────────────────────────────────────────────────────
 
 
 class ChatRequest(BaseModel):
