@@ -46,7 +46,9 @@ export default function ChatInput({ onSend, disabled }) {
           fontFamily: "'Source Serif 4', serif",
           lineHeight: "1.5",
           outline: "none",
-          boxShadow: focused ? "0 0 0 3px rgba(28,43,74,0.08)" : "none",
+          boxShadow: focused 
+            ? "0 0 0 3px rgba(80,125,214,0.12), 0 2px 8px rgba(28,43,74,0.08)" 
+            : "inset 0 1px 2px rgba(28,43,74,0.04), 0 1px 3px rgba(28,43,74,0.03)",
         }}
       />
       <button

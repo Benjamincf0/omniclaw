@@ -26,21 +26,9 @@ export default function Header() {
         </p>
       </div>
 
-      <div
-        className="flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full"
-        style={{
-          backgroundColor: "var(--bg-parchment)",
-          border: "1px solid var(--border)",
-          color: "var(--navy-muted)",
-          fontFamily: "'Source Serif 4', serif",
-        }}
-      >
-        <span
-          className="w-1.5 h-1.5 rounded-full animate-pulse"
-          style={{ backgroundColor: "#5AAF72" }}
-        />
-        Live
-      </div>
+    
+        
+
     </header>
   )
 }

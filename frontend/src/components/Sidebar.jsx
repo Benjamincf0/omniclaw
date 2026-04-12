@@ -68,28 +68,27 @@ const bottomItems = [
   },
 ]
 
-export default function Sidebar({ activePage, onNavigate }) {
+export default function Sidebar({ activePage, onNavigate, consent = false, onOpenConsent = () => {} }) {
   return (
     <aside
       className="flex flex-col h-full shrink-0"
       style={{
         width: "220px",
-        backgroundColor: "var(--navy)",
-        borderRight: "1px solid rgba(255,255,255,0.07)",
+        backgroundColor: "var(--sidebar-bg)",
+        borderRight: "1px solid rgba(255,255,255,0.06)",
       }}
     >
-      {/* Logo area */}
+      {/* Logo */}
       <div
         className="flex items-center gap-3 px-5 py-5"
-        style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}
+        style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}
       >
         <div
-          className="w-8 h-8 rounded-sm flex items-center justify-center text-sm font-bold shrink-0"
+          className="w-8 h-8 rounded-md flex items-center justify-center text-sm font-bold shrink-0"
           style={{
-            backgroundColor: "rgba(200,184,154,0.15)",
-            color: "#C8B89A",
+            backgroundColor: "var(--navy)",
+            color: "#fff",
             fontFamily: "'DM Serif Display', serif",
-            border: "1px solid rgba(200,184,154,0.2)",
           }}
         >
           O
@@ -97,24 +96,24 @@ export default function Sidebar({ activePage, onNavigate }) {
         <div>
           <span
             className="text-sm font-semibold block leading-tight"
-            style={{ fontFamily: "'DM Serif Display', serif", color: "#EDE8DC" }}
+            style={{ fontFamily: "'DM Serif Display', serif", color: "#ffffff" }}
           >
             Omniclaw
           </span>
           <span
             className="text-[10px] block leading-tight"
-            style={{ color: "rgba(200,184,154,0.6)", letterSpacing: "0.06em" }}
+            style={{ color: "rgba(255,255,255,0.45)", letterSpacing: "0.08em" }}
           >
-            JAC
+            JAC ASSISTANT
           </span>
         </div>
       </div>
 
       {/* Main nav */}
-      <nav className="flex flex-col gap-1 px-3 py-4 flex-1">
+      <nav className="flex flex-col gap-0.5 px-3 py-4 flex-1">
         <p
           className="text-[10px] px-2 mb-2"
-          style={{ color: "rgba(200,184,154,0.4)", letterSpacing: "0.1em" }}
+          style={{ color: "rgba(255,255,255,0.35)", letterSpacing: "0.12em" }}
         >
           NAVIGATION
         </p>
@@ -128,10 +127,10 @@ export default function Sidebar({ activePage, onNavigate }) {
         ))}
       </nav>
 
-      {/* Bottom nav (Help, Settings, etc.) */}
+      {/* Bottom nav */}
       <div
-        className="flex flex-col gap-1 px-3 py-3"
-        style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}
+        className="flex flex-col gap-0.5 px-3 py-3"
+        style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}
       >
         {bottomItems.map((item) => (
           <NavButton
@@ -142,18 +141,39 @@ export default function Sidebar({ activePage, onNavigate }) {
           />
         ))}
 
-        {/* Connected pill */}
         <div className="flex items-center gap-2 px-3 pt-3">
-          <span
-            className="w-1.5 h-1.5 rounded-full animate-pulse"
-            style={{ backgroundColor: "#5AAF72" }}
-          />
-          <span
-            className="text-[11px]"
-            style={{ color: "rgba(200,184,154,0.5)", fontFamily: "'Source Serif 4', serif" }}
-          >
-            Connected to Omnivox
-          </span>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <span
+                className="w-1.5 h-1.5 rounded-full animate-pulse"
+                style={{ backgroundColor: "#4ade80" }}
+              />
+              <span
+                className="text-[11px]"
+                style={{ color: "rgba(255,255,255,0.4)", fontFamily: "'Source Serif 4', serif" }}
+              >
+                Connected to Omnivox
+              </span>
+            </div>
+          </div>
+
+          {/* Consent status and quick action */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onOpenConsent}
+              className="text-[11px] px-2 py-1 rounded-md"
+              style={{
+                backgroundColor: consent ? "rgba(255,255,255,0.06)" : "rgba(255,0,0,0.06)",
+                color: consent ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.7)",
+                border: "1px solid rgba(255,255,255,0.04)",
+                cursor: "pointer",
+                fontFamily: "'Source Serif 4', serif",
+              }}
+              title={consent ? "Consent given — view" : "Consent required — click to read"}
+            >
+              {consent ? "Consent: OK" : "Consent: Required"}
+            </button>
+          </div>
         </div>
       </div>
     </aside>
@@ -164,23 +184,24 @@ function NavButton({ item, active, onClick }) {
   return (
     <button
       onClick={onClick}
-      className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm w-full text-left transition-all duration-150 cursor-pointer"
+      className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm w-full text-left transition-all duration-200"
       style={
         active
           ? {
-              backgroundColor: "rgba(200,184,154,0.12)",
-              color: "#EDE8DC",
-              border: "1px solid rgba(200,184,154,0.15)",
+              backgroundColor: "rgba(255,255,255,0.12)",
+              color: "#ffffff",
+              border: "1px solid rgba(255,255,255,0.14)",
+              cursor: "pointer",
             }
           : {
               backgroundColor: "transparent",
-              color: item.soon ? "rgba(200,184,154,0.35)" : "rgba(200,184,154,0.55)",
+              color: item.soon ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.65)",
               border: "1px solid transparent",
               cursor: item.soon ? "default" : "pointer",
             }
       }
     >
-      <span style={{ opacity: active ? 1 : item.soon ? 0.35 : 0.6 }}>{item.icon}</span>
+      <span style={{ opacity: active ? 1 : item.soon ? 0.3 : 0.7 }}>{item.icon}</span>
       <span style={{ fontFamily: "'Source Serif 4', serif", fontSize: "0.8125rem" }}>
         {item.label}
       </span>
@@ -188,8 +209,8 @@ function NavButton({ item, active, onClick }) {
         <span
           className="ml-auto text-[9px] px-1.5 py-0.5 rounded"
           style={{
-            backgroundColor: "rgba(200,184,154,0.08)",
-            color: "rgba(200,184,154,0.35)",
+            backgroundColor: "rgba(255,255,255,0.07)",
+            color: "rgba(255,255,255,0.3)",
             letterSpacing: "0.06em",
           }}
         >
