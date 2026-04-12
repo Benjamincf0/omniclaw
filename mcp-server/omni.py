@@ -1,77 +1,166 @@
+"""
+Omniclaw MCP + HTTP server.
+
+Authentication flow
+-------------------
+1. An MCP client (e.g. Claude Desktop) discovers the server at the configured URL.
+2. FastMCP returns OAuth2 metadata pointing to Auth0.
+3. The client opens a browser → the student logs in with Auth0.
+4. The client receives a JWT access token; every subsequent MCP request carries
+   it as  Authorization: Bearer <token>.
+5. FastMCP validates the JWT and injects the token into tools via CurrentAccessToken().
+6. Tools extract the Auth0 "sub" claim as user_id and look up that user's stored
+   Omnivox cookies in user_tokens.json.
+
+Linking an Omnivox account (MCP clients)
+-----------------------------------------
+get_account_status() returns a link_url pointing at the web frontend /setup page.
+The student opens that URL in a browser, logs in with Auth0 (same identity), enters
+their Omnivox credentials, and the backend runs a headless Playwright login to
+capture and store their cookies.  After that, all MCP tool calls work automatically.
+
+HTTP endpoints (registered as @mcp.custom_route so they live on the same port
+as the MCP server):
+  POST /setup-omnivox   — headless Omnivox login (used by the React frontend)
+  GET  /account-status  — check link status (used by the React frontend)
+  GET  /health          — liveness probe
+  POST /chat            — Gemini chat proxy (used by the React frontend)
+"""
+
+from __future__ import annotations
+
 import asyncio
 import os
 
-import uvicorn
+import httpx as _httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from fastmcp import FastMCP
-from fastmcp.server.auth.providers.auth0 import Auth0Provider
-from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.auth import OAuthProxy, AccessToken
+from fastmcp.server.auth.providers.jwt import JWTVerifier
+from fastmcp.dependencies import CurrentAccessToken
 from google import genai
 from google.genai import types
-from pydantic import BaseModel
+from jose import jwt as _jose_jwt
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
-from models.mio import AllMiosReq, AllMiosRes, MioReq, MioRes, get_all_mios
-from models.mio import get_mio as fetch_mio
-from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
-from models.news import get_news as fetch_news
-from omnivox_client import omnivox_request
+from auth_manager import authenticate_headless
+from models.mio import AllMiosReq, AllMiosRes, MioReq, MioRes
+from models.mio import get_all_mios as _get_all_mios
+from models.mio import get_mio as _get_mio_detail
+from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes
+from models.news import get_all_news as _get_all_news
+from models.news import get_news as _get_news_detail
+from omnivox_client import omnivox_request_for_user
+from user_store import has_omnivox_cookies
 
-# Load environment variables
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+
 load_dotenv()
-# Anyone connecting must send: Authorization: Bearer my-secret-token
-# auth = StaticTokenVerifier(
-#     tokens={
-#         os.environ["MCP_TOKEN"]: {
-#             "client_id": "trusted-client",
-#             "scopes": ["read", "write"],
-#         }
-#     }
-# )
-# setup oauth
-auth = Auth0Provider(
-    config_url=os.environ["AUTH0_CONFIG_URL"],
-    client_id=os.environ["AUTH0_CLIENT_ID"],
-    client_secret=os.environ["AUTH0_CLIENT_SECRET"],
-    audience=os.environ["AUTH0_AUDIENCE"],
-    base_url=os.environ.get("AUTH0_BASE_URL", "http://localhost:8000"),
+
+_required = [
+    "AUTH0_DOMAIN",
+    "AUTH0_CLIENT_ID",
+    "AUTH0_CLIENT_SECRET",
+    "AUTH0_AUDIENCE",
+    "GEMINI_API_KEY",
+]
+for _var in _required:
+    if not os.environ.get(_var):
+        raise RuntimeError(f"Missing required environment variable: {_var}")
+
+AUTH0_DOMAIN: str = os.environ["AUTH0_DOMAIN"]  # e.g. "dev-xxx.us.auth0.com"
+AUTH0_CLIENT_ID: str = os.environ["AUTH0_CLIENT_ID"]
+AUTH0_CLIENT_SECRET: str = os.environ["AUTH0_CLIENT_SECRET"]
+AUTH0_AUDIENCE: str = os.environ["AUTH0_AUDIENCE"]  # e.g. "https://omniclaw.api"
+BASE_URL: str = os.environ.get("BASE_URL", "http://localhost:8000")
+FRONTEND_URL: str = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+MCP_HOST: str = os.environ.get("MCP_HOST", "localhost")
+
+# ---------------------------------------------------------------------------
+# Auth0 OAuth proxy
+# ---------------------------------------------------------------------------
+# Auth0 does not support Dynamic Client Registration, so we use OAuthProxy which
+# presents a DCR-compatible interface to MCP clients while using our pre-registered
+# Auth0 app behind the scenes.
+
+_token_verifier = JWTVerifier(
+    jwks_uri=f"https://{AUTH0_DOMAIN}/.well-known/jwks.json",
+    issuer=f"https://{AUTH0_DOMAIN}/",
+    audience=AUTH0_AUDIENCE,
 )
 
+auth = OAuthProxy(
+    upstream_authorization_endpoint=f"https://{AUTH0_DOMAIN}/authorize",
+    upstream_token_endpoint=f"https://{AUTH0_DOMAIN}/oauth/token",
+    upstream_client_id=AUTH0_CLIENT_ID,
+    upstream_client_secret=AUTH0_CLIENT_SECRET,
+    token_verifier=_token_verifier,
+    base_url=BASE_URL,
+    # Auth0 requires the audience parameter to issue a JWT (not an opaque token).
+    extra_authorize_params={"audience": AUTH0_AUDIENCE},
+    extra_token_params={"audience": AUTH0_AUDIENCE},
+    # Stable signing key so client registrations survive server restarts.
+    # Generate once with: python -c "import secrets; print(secrets.token_hex(32))"
+    # and add JWT_SIGNING_KEY=<value> to your .env
+    jwt_signing_key=os.environ.get("JWT_SIGNING_KEY") or AUTH0_CLIENT_SECRET,
+)
 
-async def get_omnivox_token(user_id: str) -> str:
-    """Get the Omnivox token for a user."""
-    return "asdfasdf"
+# ---------------------------------------------------------------------------
+# FastMCP server
+# ---------------------------------------------------------------------------
 
-
-# Initialize FastMCP server
 mcp = FastMCP("omniclaw", auth=auth)
 
-# Constants
-host = os.environ.get("MCP_HOST") or "localhost"
+
+def _get_user_id(token: AccessToken = CurrentAccessToken()) -> str:
+    """Extract the Auth0 user ID (sub claim) from the validated JWT."""
+    user_id: str | None = token.claims.get("sub")
+    if not user_id:
+        raise PermissionError("Token is missing the 'sub' claim.")
+    return user_id
+
+
+# ── MIO tools ────────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-async def get_mio(num: int = 10) -> AllMiosRes:
-    """Get MIOs (internal messages) for a student's Omnivox."""
+async def get_mio(
+    num: int = 10,
+    token: AccessToken = CurrentAccessToken(),
+) -> AllMiosRes:
+    """Get the most recent MIOs (internal messages) from a student's Omnivox inbox."""
     if num < 1:
         raise ValueError("num must be at least 1")
-
-    mios = await get_all_mios(AllMiosReq())
+    user_id = _get_user_id(token)
+    mios = await _get_all_mios(AllMiosReq(), user_id=user_id)
     return AllMiosRes(mios=mios.mios[:num])
 
 
 @mcp.tool()
-async def get_mio_item(link: str) -> MioRes:
-    """Get the contents of a single Omnivox MIO."""
-    return await fetch_mio(MioReq(link=link))
+async def get_mio_item(
+    link: str,
+    token: AccessToken = CurrentAccessToken(),
+) -> MioRes:
+    """Get the full contents of a single Omnivox MIO by its link."""
+    user_id = _get_user_id(token)
+    return await _get_mio_detail(MioReq(link=link), user_id=user_id)
 
 
 @mcp.tool()
-async def send_mio(subject: str, message: str) -> str:
-    """Send an MIO through a student's Omnivox."""
-    # TODO: replace with actual Omnivox send endpoint + proper form fields
-    resp = await omnivox_request(
+async def send_mio(
+    subject: str,
+    message: str,
+    token: AccessToken = CurrentAccessToken(),
+) -> str:
+    """Send an MIO through a student's Omnivox account."""
+    user_id = _get_user_id(token)
+    resp = await omnivox_request_for_user(
+        user_id,
         "/intr/Module/MessagerieEleve/Envoyer.aspx",
         method="POST",
         data={"subject": subject, "message": message},
@@ -79,25 +168,58 @@ async def send_mio(subject: str, message: str) -> str:
     return resp.text
 
 
+# ── News tools ────────────────────────────────────────────────────────────────
+
+
 @mcp.tool()
-async def get_news(num: int = 10) -> AllNewsRes:
-    """get the latest student news"""
+async def get_news(
+    num: int = 10,
+    token: AccessToken = CurrentAccessToken(),
+) -> AllNewsRes:
+    """Get the latest student news from John Abbott College Omnivox."""
     if num < 1:
         raise ValueError("num must be at least 1")
-
-    news = await get_all_news(AllNewsReq())
+    user_id = _get_user_id(token)
+    news = await _get_all_news(AllNewsReq(), user_id=user_id)
     return AllNewsRes(news_links=news.news_links[:num])
 
 
 @mcp.tool()
-async def get_news_item(link: str) -> NewsRes:
-    """get the contents of a single student news post"""
-    return await fetch_news(NewsReq(link=link))
+async def get_news_item(
+    link: str,
+    token: AccessToken = CurrentAccessToken(),
+) -> NewsRes:
+    """Get the full contents of a single John Abbott College news post."""
+    user_id = _get_user_id(token)
+    return await _get_news_detail(NewsReq(link=link), user_id=user_id)
 
 
-# ── Gemini setup ──────────────────────────────────────────────────────────────
+# ── Account status tool ───────────────────────────────────────────────────────
 
-TOOL_HANDLERS = {
+
+@mcp.tool()
+async def get_account_status(
+    token: AccessToken = CurrentAccessToken(),
+) -> dict:
+    """
+    Check whether the student's Omnivox account is linked.
+    Returns a dict with 'linked' (bool) and 'link_url' if not linked.
+    """
+    user_id = _get_user_id(token)
+    linked = await has_omnivox_cookies(user_id)
+    result: dict = {"linked": linked, "user_id": user_id}
+    if not linked:
+        result["link_url"] = f"{FRONTEND_URL}/setup"
+        result["message"] = (
+            "Your Omnivox account is not linked. "
+            f"Please open {FRONTEND_URL}/setup in your browser to connect it."
+        )
+    return result
+
+
+# ── Gemini setup (for the /chat FastAPI endpoint used by the frontend) ────────
+
+TOOL_HANDLERS: dict = {
     "get_mio": get_mio,
     "send_mio": send_mio,
     "get_news": get_news,
@@ -180,17 +302,15 @@ SYSTEM_PROMPT = (
 def _build_contents(message: str, history: list[dict]) -> list[types.Content]:
     """Convert frontend history (plain dicts) + new message into Content objects."""
     contents = []
-
     for item in history:
         role = item.get("role", "user")
-        # Normalise "assistant" → "model" (Gemini expects "model")
         if role == "assistant":
             role = "model"
-        # Convert message parts to types.Part, ignoring any parts that don't have text (e.g. tool calls)
-        parts = [types.Part(text=p["text"]) for p in item.get("parts", [])]
+        parts = [
+            types.Part(text=p["text"]) for p in item.get("parts", []) if "text" in p
+        ]
         if parts:
             contents.append(types.Content(role=role, parts=parts))
-
     contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
     return contents
 
@@ -207,16 +327,15 @@ async def _generate(contents: list) -> types.GenerateContentResponse:
                     tools=GEMINI_TOOLS,
                 ),
             )
-
         except Exception as e:
             if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) and attempt < 2:
-                await asyncio.sleep(2**attempt)  # 1s, 2s
+                await asyncio.sleep(2**attempt)
                 continue
             raise
 
 
 async def run_chat(message: str, history: list[dict]) -> str:
-    """Agentic loop: call Gemini, execute any tool calls, repeat until final text."""
+    """Agentic Gemini loop: call model, execute tool calls, repeat until text."""
     contents = _build_contents(message, history)
 
     while True:
@@ -224,21 +343,17 @@ async def run_chat(message: str, history: list[dict]) -> str:
         candidate = response.candidates[0].content
         function_calls = [p for p in candidate.parts if p.function_call]
 
-        # No tool calls — Gemini is done
         if not function_calls:
             return "\n".join(p.text for p in candidate.parts if p.text)
 
-        # Append Gemini's response (with tool calls) to the conversation
         contents.append(candidate)
 
-        # Execute each tool and collect results
         tool_results: list[types.Part] = []
         for part in function_calls:
             fc = part.function_call
             handler = TOOL_HANDLERS.get(fc.name)
             if handler:
                 result = await handler(**dict(fc.args))
-                # Pydantic models need serialisation; strings pass through fine
                 if hasattr(result, "model_dump"):
                     result = result.model_dump()
             else:
@@ -253,56 +368,149 @@ async def run_chat(message: str, history: list[dict]) -> str:
         contents.append(types.Content(role="user", parts=tool_results))
 
 
-# ── FastAPI app ───────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Shared JWT validation helpers (used by custom HTTP routes below)
+# ---------------------------------------------------------------------------
 
-app = FastAPI(title="Omniclaw API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Cache the JWKS so we don't fetch it on every request.
+_jwks_cache: dict | None = None
 
 
-class ChatRequest(BaseModel):
-    message: str
-    history: list[dict] = []
+async def _get_jwks() -> dict:
+    global _jwks_cache
+    if _jwks_cache is None:
+        async with _httpx.AsyncClient() as hc:
+            resp = await hc.get(f"https://{AUTH0_DOMAIN}/.well-known/jwks.json")
+            resp.raise_for_status()
+            _jwks_cache = resp.json()
+    return _jwks_cache
 
 
-class ChatResponse(BaseModel):
-    reply: str
-
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(body: ChatRequest):
-    if not body.message.strip():
-        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+async def _decode_jwt(token: str) -> dict | None:
+    """Validate an Auth0 JWT and return its payload, or None on failure."""
     try:
-        reply = await run_chat(body.message, body.history)
-        return ChatResponse(reply=reply)
+        jwks = await _get_jwks()
+        return _jose_jwt.decode(
+            token,
+            jwks,
+            algorithms=["RS256"],
+            audience=AUTH0_AUDIENCE,
+            issuer=f"https://{AUTH0_DOMAIN}/",
+        )
+    except Exception:
+        return None
+
+
+async def _require_user_id(request: Request) -> str | None:
+    """Extract and validate Bearer token from request; return sub claim or None."""
+    auth_header: str = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header[len("Bearer ") :]
+    payload = await _decode_jwt(token)
+    if not payload:
+        return None
+    return payload.get("sub")
+
+
+def _json(data: dict, status: int = 200) -> JSONResponse:
+    return JSONResponse(content=data, status_code=status)
+
+
+# ---------------------------------------------------------------------------
+# Custom HTTP routes (registered on the FastMCP server so they share port 8000)
+# ---------------------------------------------------------------------------
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> Response:
+    """Simple liveness probe."""
+    return _json({"status": "ok", "model": "gemini-2.5-flash"})
+
+
+@mcp.custom_route("/account-status", methods=["GET"])
+async def account_status(request: Request) -> Response:
+    """Return whether the authenticated user has linked their Omnivox account."""
+    user_id = await _require_user_id(request)
+    if not user_id:
+        return _json({"detail": "Missing or invalid Authorization header."}, 401)
+    linked = await has_omnivox_cookies(user_id)
+    return _json({"linked": linked, "user_id": user_id})
+
+
+@mcp.custom_route("/setup-omnivox", methods=["POST"])
+async def setup_omnivox(request: Request) -> Response:
+    """
+    Accepts Omnivox email + password from the web setup page.
+    Runs a headless Playwright login, captures cookies, stores them for the user.
+
+    Requires:  Authorization: Bearer <auth0_access_token>
+    """
+    user_id = await _require_user_id(request)
+    if not user_id:
+        return _json({"detail": "Missing or invalid Authorization header."}, 401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"detail": "Invalid JSON body."}, 400)
+
+    email: str = (body.get("email") or "").strip()
+    password: str = body.get("password") or ""
+
+    if not email or not password:
+        return _json({"detail": "Email and password are required."}, 400)
+
+    try:
+        await authenticate_headless(email, password, user_id)
+    except RuntimeError as exc:
+        return _json({"detail": str(exc)}, 400)
+    except Exception as exc:
+        return _json({"detail": f"Unexpected error: {exc}"}, 500)
+
+    return _json({"success": True, "message": "Omnivox account linked successfully."})
+
+
+@mcp.custom_route("/chat", methods=["POST"])
+async def chat(request: Request) -> Response:
+    """Proxy chat messages to Gemini with tool support (used by the React frontend)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"detail": "Invalid JSON body."}, 400)
+
+    message: str = body.get("message", "").strip()
+    history: list[dict] = body.get("history", [])
+
+    if not message:
+        return _json({"detail": "Message cannot be empty."}, 400)
+
+    try:
+        reply = await run_chat(message, history)
+        return _json({"reply": reply})
     except Exception as e:
         msg = str(e)
         status = 429 if "429" in msg or "RESOURCE_EXHAUSTED" in msg else 502
-        raise HTTPException(status_code=status, detail=msg)
+        return _json({"detail": msg}, status)
 
 
-@app.get("/health")
-async def health():
-    return {"status": "ok", "model": "gemini-2.5-flash"}
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+_CORS_MIDDLEWARE = [
+    Middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+]
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
-
-
-def main():
-    # run the server
-    # mcp.run(transport="http", host="0.0.0.0", port=8000) # turn on MCP server to use the external AI clients
-    # uvicorn.run(
-    #     app, host="0.0.0.0", port=8000, reload=False
-    # )  # run FastAPI server for the frontend to connect to
-
-    mcp.run(transport="http", host=host, port=8000)
+def main() -> None:
+    """Run the FastMCP HTTP server with CORS enabled."""
+    mcp.run(transport="http", host=MCP_HOST, port=8000, middleware=_CORS_MIDDLEWARE)
 
 
 if __name__ == "__main__":

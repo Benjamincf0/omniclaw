@@ -16,6 +16,7 @@ if str(_SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVER_ROOT))
 
 from auth_manager import authenticate, load_auth  # noqa: E402
+from omnivox_client import omnivox_request_for_user  # noqa: E402
 
 NEWS_LIST_URL_ENV = "NEWS_LIST_URL"
 NEWS_TOKEN_ENV = "NEWS_TOKEN"
@@ -99,9 +100,7 @@ def _build_headers(config: NewsConfig) -> dict[str, str]:
             "Referer": config.list_url,
         }
 
-    auth_value = (
-        f"{config.auth_prefix}{token}" if config.auth_prefix else token
-    )
+    auth_value = f"{config.auth_prefix}{token}" if config.auth_prefix else token
     return {
         config.auth_header: auth_value,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -140,7 +139,20 @@ def _headers_with_token(config: NewsConfig, token: str) -> dict[str, str]:
     return headers
 
 
-async def _fetch_html(url: str, config: NewsConfig) -> str:
+async def _fetch_html(url: str, config: NewsConfig, user_id: str | None = None) -> str:
+    """Fetch an Omnivox HTML page.
+
+    When *user_id* is provided (multi-tenant mode) the request is made via
+    omnivox_request_for_user which reads per-user cookies from user_store.
+    Otherwise falls back to the legacy single-user flow (auth.txt).
+    """
+    if user_id:
+        # Multi-tenant path: delegate cookie management to omnivox_client.
+        resp = await omnivox_request_for_user(user_id, url.replace(OMNIVOX_BASE, ""))
+        resp.raise_for_status()
+        return resp.text
+
+    # Legacy single-user path.
     token = await _ensure_news_token(target_url=url)
 
     async with httpx.AsyncClient(
@@ -317,10 +329,11 @@ def _extract_content(root: Tag | BeautifulSoup, selector: str | None) -> str:
     return "\n\n".join(blocks)
 
 
-async def get_all_news(req: AllNewsReq) -> AllNewsRes:
+async def get_all_news(req: AllNewsReq, user_id: str | None = None) -> AllNewsRes:
+    """Return a list of news article URLs from the Omnivox news feed."""
     del req
     config = _load_config()
-    html = await _fetch_html(config.list_url, config)
+    html = await _fetch_html(config.list_url, config, user_id=user_id)
     return AllNewsRes(
         news_links=_extract_news_links(
             html, base_url=config.list_url, selector=config.link_selector
@@ -328,9 +341,10 @@ async def get_all_news(req: AllNewsReq) -> AllNewsRes:
     )
 
 
-async def get_news(req: NewsReq) -> NewsRes:
+async def get_news(req: NewsReq, user_id: str | None = None) -> NewsRes:
+    """Return the title and content of a single Omnivox news article."""
     config = _load_config()
-    html = await _fetch_html(req.link, config)
+    html = await _fetch_html(req.link, config, user_id=user_id)
     soup = BeautifulSoup(html, "html.parser")
     container = _find_matching_news_container(
         soup, _extract_requested_news_id(req.link)
