@@ -7,6 +7,8 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
+from models.calendar import AllCalendarEventsReq, AllCalendarEventsRes
+from models.calendar import get_calendar_events as fetch_calendar_events
 from models.mio import AllMiosReq, AllMiosRes, MioReq, MioRes, get_all_mios
 from models.mio import get_mio as fetch_mio
 from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
@@ -91,6 +93,20 @@ async def get_news_item(link: str) -> NewsRes:
     return await fetch_news(NewsReq(link=link))
 
 
+@mcp.tool()
+async def get_calendar_events(
+    num: int = 10, include_past: bool = False
+) -> AllCalendarEventsRes:
+    """Get calendar events from the student's Omnivox homepage."""
+    if num < 1:
+        raise ValueError("num must be at least 1")
+
+    events = await fetch_calendar_events(
+        AllCalendarEventsReq(include_past=include_past)
+    )
+    return AllCalendarEventsRes(events=events.events[:num])
+
+
 
 
 
@@ -103,6 +119,7 @@ TOOL_HANDLERS = {
     "send_mio": send_mio,
     "get_news": get_news,
     "get_news_item": get_news_item,
+    "get_calendar_events": get_calendar_events,
 }
 
 GEMINI_TOOLS = [
@@ -150,6 +167,23 @@ GEMINI_TOOLS = [
                         "link": types.Schema(type=types.Type.STRING, description="The news post URL."),
                     },
                     required=["link"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_calendar_events",
+                description="Get calendar events from the student's Omnivox homepage.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "num": types.Schema(
+                            type=types.Type.INTEGER,
+                            description="How many calendar events to fetch (default 10).",
+                        ),
+                        "include_past": types.Schema(
+                            type=types.Type.BOOLEAN,
+                            description="Whether to include past events in the results.",
+                        ),
+                    },
                 ),
             ),
         ]
