@@ -11,5 +11,6 @@ wheels/
 
 # Auth credentials
 auth.txt
+auth_state.json
 
 .env
