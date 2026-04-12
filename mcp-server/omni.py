@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import sys
 from functools import lru_cache
@@ -6,6 +7,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastmcp import FastMCP
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
 
 from models.calendar import AllCalendarEventsReq, AllCalendarEventsRes
 from models.calendar import get_calendar_events as fetch_calendar_events
@@ -489,10 +498,11 @@ async def health():
 # ── Settings API ─────────────────────────────────────────────────────────────
 
 def _config_path() -> Path:
-    """Writable config file next to the executable (survives restarts)."""
+    """Writable config file in project root (shared with orchestrator)."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent / "omniclaw.env"
-    return Path(__file__).resolve().parent / "omniclaw.env"
+    # Go up from mcp-server/omni.py to project root
+    return Path(__file__).resolve().parent.parent / ".env"
 
 
 def _read_persistent_config() -> dict[str, str]:
@@ -511,8 +521,61 @@ def _read_persistent_config() -> dict[str, str]:
 
 
 def _write_persistent_config(config: dict[str, str]) -> None:
-    lines = [f"{k}={v}" for k, v in config.items() if v]
-    _config_path().write_text("\n".join(lines) + "\n", encoding="utf-8")
+    """Update .env file, preserving comments and unmanaged keys."""
+    path = _config_path()
+    existing_lines = []
+    updated_keys = set()
+    changes = []  # Track changes for logging
+    
+    # Read existing config for comparison
+    old_config = _read_persistent_config()
+    
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            # Preserve empty lines and comments
+            if not stripped or stripped.startswith("#"):
+                existing_lines.append(line)
+                continue
+            # Parse key=value
+            key, sep, old_value = stripped.partition("=")
+            key = key.strip()
+            old_value = old_value.strip()
+            if sep and key in config:
+                new_value = config[key]
+                # Update this key with new value
+                existing_lines.append(f"{key}={new_value}")
+                updated_keys.add(key)
+                # Log if value changed
+                if old_value != new_value:
+                    # Mask sensitive values
+                    is_secret = any(s.get("key") == key and s.get("secret") for s in SETTINGS_SCHEMA)
+                    old_display = _mask(old_value) if is_secret and old_value else old_value or "(empty)"
+                    new_display = _mask(new_value) if is_secret and new_value else new_value or "(empty)"
+                    changes.append(f"  {key}: {old_display} → {new_display}")
+            else:
+                # Keep unchanged
+                existing_lines.append(line)
+                if sep:
+                    updated_keys.add(key)
+    
+    # Add new keys that weren't in the file
+    for key, value in config.items():
+        if key not in updated_keys and value:
+            existing_lines.append(f"{key}={value}")
+            is_secret = any(s.get("key") == key and s.get("secret") for s in SETTINGS_SCHEMA)
+            display_value = _mask(value) if is_secret else value
+            changes.append(f"  {key}: (new) → {display_value}")
+    
+    path.write_text("\n".join(existing_lines) + "\n", encoding="utf-8")
+    
+    # Log the changes
+    if changes:
+        logger.info(f"Settings updated in {path}:")
+        for change in changes:
+            logger.info(change)
+    else:
+        logger.info(f"Settings saved (no changes) to {path}")
 
 
 def _mask(value: str) -> str:
@@ -585,7 +648,23 @@ async def save_settings(body: SettingsUpdate):
 
     _write_persistent_config(config)
     _get_gemini_client.cache_clear()
-    return {"status": "ok"}
+    
+    # Notify orchestrator to reload its config
+    orchestrator_url = os.getenv("ORCHESTRATOR_URL", "http://127.0.0.1:8080")
+    reload_result = None
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(f"{orchestrator_url}/reload")
+            if resp.status_code == 200:
+                reload_result = resp.json()
+                logger.info(f"Orchestrator reloaded: {reload_result}")
+            else:
+                logger.warning(f"Orchestrator reload failed: {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Could not reload orchestrator: {e}")
+    
+    return {"status": "ok", "orchestrator_reloaded": reload_result}
 
 
 for _route in mcp_http_app.routes:

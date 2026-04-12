@@ -121,7 +121,7 @@ export default function GlancePanel() {
         </motion.div>
 
         {/* Stats */}
-        <motion.div variants={item} className="flex flex-col gap-3">
+        {/* <motion.div variants={item} className="flex flex-col gap-3">
           <p
             className="text-[10px]"
             style={{ color: "var(--text-muted)", letterSpacing: "0.1em" }}
@@ -159,7 +159,7 @@ export default function GlancePanel() {
               </div>
             </div>
           ))}
-        </motion.div>
+        </motion.div> */}
 
         {/* Tip */}
         <motion.div variants={item}>
