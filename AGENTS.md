@@ -1,12 +1,12 @@
 # AGENTS.md
 
 This repo contains **Omniclaw** — a John Abbott College Omnivox assistant consisting of:
-- `mcp-server/` — Python FastMCP + FastAPI backend (MCP tools + Gemini chat endpoint)
+- `mcp-server/` — Python FastMCP backend (MCP tools + HTTP endpoints via `@mcp.custom_route()`)
 - `frontend/` — React/Vite chat UI
 
 ## Project Context
 
-Omnivox authenticates via a token sent in the **request body** (not headers). The server reads the token from `auth.txt`; if missing or invalid, it launches a Playwright browser to intercept and capture a fresh token. See the comment at the top of `a_news.html` for the example `curl` command showing the body token pattern.
+Omnivox has no public API. Omniclaw captures a student's Omnivox session cookies via Playwright browser automation and replays them on subsequent httpx HTTP requests to scrape Omnivox pages. Cookies are stored per-user in `user_tokens.json`, keyed by the student's Auth0 `sub` claim.
 
 ---
 
@@ -19,7 +19,7 @@ All Python commands use `uv`. Always run from the `mcp-server/` directory.
 | Task | Command |
 |---|---|
 | Install dependencies | `uv sync` |
-| Start MCP/FastAPI server | `uv run omni.py` |
+| Start server | `uv run omni.py` |
 | Run news integration test | `uv run python test_news.py` |
 | Run server smoke test | `uv run python test_server.py` |
 | Run a single test file | `uv run python <test_file>.py` |
@@ -47,23 +47,35 @@ There are no frontend tests configured.
 ```
 omniclaw/
 ├── mcp-server/
-│   ├── omni.py            # Main server: FastMCP tools + FastAPI /chat + /health
-│   ├── omnivox_client.py  # Authenticated httpx client (reads auth.txt, retries)
-│   ├── auth_manager.py    # Playwright-based auth token capture
+│   ├── omni.py            # Main server: FastMCP tools + custom HTTP routes
+│   ├── omnivox_client.py  # Authenticated httpx client (per-user + legacy)
+│   ├── auth_manager.py    # Playwright login: headed + headless flows
+│   ├── user_store.py      # JSON file store: Auth0 sub → Omnivox cookie string
 │   ├── models/
-│   │   └── news.py        # Pydantic models + BeautifulSoup HTML parsing
-│   ├── test_news.py        # Integration smoke test for news fetching
-│   └── test_server.py      # HTTP-level smoke test for auth/retry flow
+│   │   ├── news.py        # Pydantic models + BeautifulSoup news scraping
+│   │   └── mio.py         # Pydantic models + BeautifulSoup MIO scraping
+│   ├── user_tokens.json   # Runtime: per-user Omnivox cookies (gitignored)
+│   ├── auth.txt           # Runtime: legacy single-user cookie (gitignored)
+│   └── .env               # Secrets (gitignored)
 └── frontend/
     └── src/
-        ├── App.jsx           # Root component: state, Gemini history, fetch logic
-        └── components/       # Header, Message, ChatInput, QuickChips, WelcomeScreen, TypingIndicator
+        ├── main.jsx       # Entry point: Auth0Provider + App
+        ├── App.jsx        # Router: /auth → /setup|/link-omnivox → / (chat)
+        └── components/    # AuthPage, SetupPage, Header, Message, ChatInput,
+                           # QuickChips, WelcomeScreen, TypingIndicator
 ```
 
 ### Key runtime behavior
-- The FastMCP server can run in MCP transport mode (`mcp.run(transport="http", ...)`) or as a plain FastAPI app via uvicorn. The active mode is toggled by commenting/uncommenting lines in `main()`.
-- The `/chat` endpoint proxies messages to Gemini (`gemini-2.5-flash`) with conversation history and a system prompt.
-- Gemini retries up to 3 times with exponential backoff (1s, 2s) on `429 / RESOURCE_EXHAUSTED`.
+- `mcp.run(transport="http", ...)` starts a single uvicorn server on port 8000 serving both the MCP protocol and all custom HTTP routes. There is no separate FastAPI app.
+- HTTP endpoints are registered with `@mcp.custom_route()`. Handlers receive a Starlette `Request` and return a Starlette `Response`. They do not use FastAPI dependency injection or `HTTPException`.
+- CORS is applied via the `middleware` parameter on `mcp.run()`.
+- The `/chat` endpoint proxies messages to Gemini (`gemini-2.5-flash`) with an agentic tool-call loop and conversation history.
+- Gemini retries up to 3 times with exponential backoff on `429 / RESOURCE_EXHAUSTED`.
+
+### Omnivox login flow (two-phase with 2FA support)
+`POST /setup-omnivox` returns `{session_id}` immediately and spawns an `asyncio.Task` running `authenticate_headless`. The frontend polls `GET /setup-status?session_id=<id>` every 1.5 s. If Omnivox shows a 2FA verification page, the task pauses on an `asyncio.Event` and the session status becomes `"needs_otp"`. The frontend shows a code input; on submit it calls `POST /setup-2fa` which sets the code and fires the event, resuming Playwright. The session eventually reaches `"success"` or `"error"`, which the poll detects and cleans up.
+
+2FA detection relies on `_OTP_INPUT_SELECTOR` in `auth_manager.py` — verify this against the actual Omnivox 2FA page HTML if the selector needs updating.
 
 ---
 
@@ -77,23 +89,24 @@ import asyncio
 import os
 
 import httpx
-from pydantic import BaseModel
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from models.news import AllNewsReq, AllNewsRes
-from omnivox_client import omnivox_request
+from omnivox_client import omnivox_request_for_user
 ```
 
 ### Naming
 - `snake_case` for functions, variables, and module-level constants that are internal.
-- `SCREAMING_SNAKE_CASE` for true constants (`SYSTEM_PROMPT`, `host` is an exception — follow existing file conventions).
-- `PascalCase` for all classes, especially Pydantic models (`ChatRequest`, `AllNewsRes`).
+- `SCREAMING_SNAKE_CASE` for true constants (`SYSTEM_PROMPT`, `FRONTEND_URL`, etc.).
+- `PascalCase` for all classes, especially Pydantic models (`AllNewsRes`, `MioRes`).
 - Prefix private helpers with `_` (`_build_headers`, `_is_auth_failure`, `_normalize_text`).
 
 ### Types
 - Add type hints to all function signatures.
 - Use modern union syntax: `str | None`, not `Optional[str]`.
 - Use lowercase generics: `list[str]`, `dict[str, str]` (Python 3.10+).
-- All request/response shapes are Pydantic `BaseModel` subclasses.
+- Pydantic `BaseModel` subclasses for all MCP tool input/output shapes.
 
 ### Async
 - All functions that touch Omnivox or external APIs must be `async def`.
@@ -101,7 +114,7 @@ from omnivox_client import omnivox_request
 
 ### Error handling
 - Raise semantically appropriate exceptions: `ValueError` for bad input/config, `RuntimeError` for auth failures, `PermissionError` after all retries exhausted.
-- In FastAPI routes, convert exceptions to `HTTPException` with an appropriate status code.
+- In `@mcp.custom_route()` handlers, return `JSONResponse({"detail": "..."}, status_code=4xx)` directly — do not raise `HTTPException`.
 - Use `429` / `502` status codes for Gemini rate-limit vs. other upstream errors.
 - Retry pattern: `for attempt in range(3)` with `asyncio.sleep(2**attempt)`.
 
@@ -156,20 +169,30 @@ import Header from "./components/Header"
 
 ## Environment Variables
 
-Create `mcp-server/.env` (gitignored):
+### `mcp-server/.env`
 
 ```
 GEMINI_API_KEY=...
-AUTH0_CONFIG_URL=https://<your-domain>.auth0.com/.well-known/openid-configuration
-AUTH0_CLIENT_ID=...
-AUTH0_CLIENT_SECRET=...
-AUTH0_AUDIENCE=https://<your-domain>.auth0.com/api/v2/
-AUTH0_BASE_URL=http://localhost:8000   # optional, defaults to "http://localhost:8000"
-MCP_HOST=localhost                     # optional, defaults to "localhost"
-# MCP_TOKEN=...                        # used by StaticTokenVerifier (currently commented out)
+
+AUTH0_DOMAIN=dev-xxxx.us.auth0.com        # Auth0 app domain
+AUTH0_CLIENT_ID=...                        # Auth0 app Client ID
+AUTH0_CLIENT_SECRET=...                    # Auth0 app Client Secret
+AUTH0_AUDIENCE=https://omniclaw.api        # Auth0 API identifier
+
+BASE_URL=http://localhost:8000             # Public URL of this server (used in OAuth metadata)
+FRONTEND_URL=http://localhost:5173         # Public URL of the frontend (used in account-status link_url)
+# MCP_HOST=0.0.0.0                        # Optional: bind host (default: localhost)
+# JWT_SIGNING_KEY=...                      # Optional: stable key so client registrations survive restarts
 ```
 
-Frontend reads `VITE_BACKEND_URL` (defaults to `http://localhost:8000` if unset).
+### `frontend/.env`
+
+```
+VITE_AUTH0_DOMAIN=dev-xxxx.us.auth0.com
+VITE_AUTH0_CLIENT_ID=...
+VITE_AUTH0_AUDIENCE=https://omniclaw.api
+# VITE_BACKEND_URL=http://localhost:8000   # Optional: defaults to localhost:8000
+```
 
 ---
 
@@ -181,3 +204,5 @@ Build and run the MCP server container:
 docker build -t omniclaw-mcp ./mcp-server
 docker run -p 8000:8000 --env-file mcp-server/.env omniclaw-mcp
 ```
+
+Note: the Dockerfile is currently outdated (wrong Python version, missing source files). Do not rely on it without fixing it first.
