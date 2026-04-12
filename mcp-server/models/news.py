@@ -128,18 +128,12 @@ def _is_auth_redirect(response: httpx.Response) -> bool:
     return any(pat in body for pat in _LOGIN_PATTERNS)
 
 
-async def _ensure_news_token(
-    mfa_code_provider: MfaCodeProvider | None = None,
-) -> str:
-    token = os.getenv(NEWS_TOKEN_ENV, "").strip()
+async def _ensure_news_token(target_url: str | None = None) -> str:
+    token = os.getenv(NEWS_TOKEN_ENV, "").strip() or load_auth()
     if token:
         return token
 
-    cookies = load_auth()
-    if cookies and await validate_auth(cookies):
-        return cookies
-
-    token = await authenticate(mfa_code_provider=mfa_code_provider)
+    token = await authenticate(target_url=target_url)
     if not token:
         raise RuntimeError("Authentication failed — no cookies obtained")
     return token
@@ -152,21 +146,15 @@ def _headers_with_token(config: NewsConfig, token: str) -> dict[str, str]:
     return headers
 
 
-async def _fetch_html(
-    url: str,
-    config: NewsConfig,
-    mfa_code_provider: MfaCodeProvider | None = None,
-) -> str:
-    token = await _ensure_news_token(mfa_code_provider=mfa_code_provider)
+async def _fetch_html(url: str, config: NewsConfig) -> str:
+    token = await _ensure_news_token(target_url=url)
 
     async with httpx.AsyncClient(
         timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False
     ) as client:
         response = await client.get(url, headers=_headers_with_token(config, token))
         if _is_auth_redirect(response):
-            refreshed_token = await authenticate(
-                mfa_code_provider=mfa_code_provider,
-            )
+            refreshed_token = await authenticate(target_url=url)
             if not refreshed_token:
                 raise RuntimeError("Re-authentication failed")
             response = await client.get(

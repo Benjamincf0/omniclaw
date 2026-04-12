@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx
+from urllib.parse import urlparse
 from playwright.async_api import async_playwright, Request
 
 MfaCodeProvider = Callable[[], Awaitable[str]]
@@ -20,6 +21,7 @@ LOGGED_IN_PATTERNS = [
     "/intr/",
     "/main/",
     "/cvir/",
+    "/WebApplication/",
     "Module=",
     "Identification=False",
 ]
@@ -75,17 +77,30 @@ def _request_to_curl_b(request: Request) -> str | None:
     return request.headers.get("cookie")
 
 
-async def authenticate(
-    mfa_code_provider: MfaCodeProvider | None = None,
-) -> str:
-    """
-    Log in to Omnivox automatically using OMNIVOX_ID / OMNIVOX_PASSWORD
-    from .env, handle 2FA by prompting the user for a code, capture session
-    cookies and save them to auth.txt.  Returns the cookie string.
+def _module_hint(url: str) -> str:
+    path = urlparse(url).path.lower()
+    if path.startswith("/webapplication/module."):
+        parts = [part for part in path.split("/") if part]
+        if len(parts) >= 2:
+            return f"/{parts[0]}/{parts[1]}"
+    if path.startswith("/intr/"):
+        return "/intr"
+    return path or "/"
 
-    *mfa_code_provider* is an async callable that returns the 2FA code.
-    When ``None`` (e.g. running standalone), falls back to terminal input.
+
+async def authenticate(target_url: str | None = None, mfa_code_provider: MfaCodeProvider | None = None) -> str:
     """
+    Open Omnivox in a real browser, wait for the user to log in,
+    optionally warm a specific module URL, capture the session cookies
+    (curl -b format), and save to auth.txt.
+    Returns the cookie string.
+    """
+    target = target_url or OMNIVOX_URL
+    module_hint = _module_hint(target)
+
+    print(f"Opening Omnivox login page: {target}")
+    print("Please log in with your credentials. The window will close automatically.\n")
+
     _load_env()
 
     omnivox_id = os.environ.get("OMNIVOX_ID")
@@ -105,22 +120,21 @@ async def authenticate(
         page = await context.new_page()
 
         captured_cookies: str | None = None
+        target_cookies: str | None = None
 
         async def on_request(request: Request):
-            nonlocal captured_cookies
-            if captured_cookies:
-                return
+            nonlocal captured_cookies, target_cookies
             url = request.url.lower()
             if "omnivox" in url and not _is_login_page(request.url):
                 cb = _request_to_curl_b(request)
                 if cb:
                     captured_cookies = cb
+                    if urlparse(request.url).path.lower().startswith(module_hint):
+                        target_cookies = cb
 
         page.on("request", on_request)
 
-        # --- Step 1: Navigate to login page and fill credentials -----------
-        await page.goto(OMNIVOX_URL)
-        await page.wait_for_load_state("networkidle")
+        await page.goto(target)
 
         await page.fill("#Identifiant", omnivox_id)
         await page.fill("#Password", omnivox_password)
@@ -165,10 +179,18 @@ async def authenticate(
 
         await asyncio.sleep(2)
 
-        # --- Step 4: Collect cookies and save ------------------------------
+        if target != OMNIVOX_URL:
+            print(f"Warming target module: {target}")
+            await page.goto(target)
+
+        # Give a moment for target-module requests to fire
+        await asyncio.sleep(3)
+
+        # Fallback: grab cookies directly from the browser context
         all_cookies = await context.cookies()
         context_cookie_str = _cookies_to_curl_b(all_cookies)
-        cookie_body = captured_cookies or context_cookie_str
+
+        cookie_body = target_cookies or captured_cookies or context_cookie_str
 
         await browser.close()
 
