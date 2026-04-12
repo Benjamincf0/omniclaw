@@ -20,8 +20,32 @@ The intended request flow is:
 
 ## Quick start
 
-1. Start the Omnivox MCP server from [`mcp-server`](/Users/vincentliu/dev/omniclaw/mcp-server).
-2. Start the orchestrator from [`orchestrator`](/Users/vincentliu/dev/omniclaw/orchestrator).
-3. Start the bot from [`discord-bot`](/Users/vincentliu/dev/omniclaw/discord-bot).
+The easiest way to run the full stack on one server is from the repo root:
 
-Each folder has its own `README.md` with its required environment variables.
+```bash
+cp .env.example .env
+./omniclaw up
+```
+
+That command will:
+
+1. Load the shared root `.env`
+2. Run `uv sync` for `mcp-server`, `orchestrator`, and `discord-bot`
+3. Start all three services together with prefixed logs
+4. Stop the whole stack cleanly on `Ctrl+C`
+
+Required environment variables for the combined stack:
+
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `DISCORD_BOT_TOKEN`
+
+Helpful helper commands:
+
+```bash
+./omniclaw sync
+./omniclaw env
+./omniclaw up --no-sync
+```
+
+Each folder still has its own `README.md` if you want to run a single service by itself.
