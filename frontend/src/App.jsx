@@ -6,7 +6,7 @@ import ChatInput from "./components/ChatInput"
 import QuickChips from "./components/QuickChips"
 import WelcomeScreen from "./components/WelcomeScreen"
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000"
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080"
 
 async function fetchReply(message, history) {
   const res = await fetch(`${BACKEND_URL}/chat`, {
