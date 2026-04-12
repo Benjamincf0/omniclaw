@@ -9,6 +9,8 @@ from fastmcp import FastMCP
 
 from models.calendar import AllCalendarEventsReq, AllCalendarEventsRes
 from models.calendar import get_calendar_events as fetch_calendar_events
+from models.lea_classes import AllLeaClassesReq, AllLeaClassesRes
+from models.lea_classes import get_lea_classes as fetch_lea_classes
 from models.mio import AllMiosReq, AllMiosRes, MioReq, MioRes, get_all_mios
 from models.mio import get_mio as fetch_mio
 from models.news import AllNewsReq, AllNewsRes, NewsReq, NewsRes, get_all_news
@@ -107,6 +109,16 @@ async def get_calendar_events(
     return AllCalendarEventsRes(events=events.events[:num])
 
 
+@mcp.tool()
+async def get_lea_classes(num: int = 10) -> AllLeaClassesRes:
+    """Get the dashboard info for the student's LEA classes."""
+    if num < 1:
+        raise ValueError("num must be at least 1")
+
+    classes = await fetch_lea_classes(AllLeaClassesReq())
+    return AllLeaClassesRes(classes=classes.classes[:num])
+
+
 
 
 
@@ -120,6 +132,7 @@ TOOL_HANDLERS = {
     "get_news": get_news,
     "get_news_item": get_news_item,
     "get_calendar_events": get_calendar_events,
+    "get_lea_classes": get_lea_classes,
 }
 
 GEMINI_TOOLS = [
@@ -182,6 +195,19 @@ GEMINI_TOOLS = [
                         "include_past": types.Schema(
                             type=types.Type.BOOLEAN,
                             description="Whether to include past events in the results.",
+                        ),
+                    },
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_classes",
+                description="Get the dashboard info for the student's LEA classes.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "num": types.Schema(
+                            type=types.Type.INTEGER,
+                            description="How many classes to fetch (default 10).",
                         ),
                     },
                 ),
