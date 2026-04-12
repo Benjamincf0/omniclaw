@@ -9,5 +9,9 @@ dependencies = [
     "fastmcp>=3.2.3",
     "httpx>=0.28.0",
     "mcp[cli]>=1.27.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "google-genai>=1.0.0",
+    "python-dotenv>=1.0.0",
     "playwright>=1.49.0",
 ]

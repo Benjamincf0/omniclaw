@@ -1,3 +1,4 @@
+
 # Python-generated files
 __pycache__/
 *.py[oc]
@@ -11,3 +12,6 @@ wheels/
 
 # Local credentials and auth artifacts
 auth.txt
+
+mcp-server/.env
+
