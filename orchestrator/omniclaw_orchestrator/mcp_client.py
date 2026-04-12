@@ -9,6 +9,7 @@ from mcp import ClientSession, types
 from mcp.client.streamable_http import streamablehttp_client
 
 from .config import McpServerConfig
+from .tool_hints import augment_tool_description
 
 
 @dataclass(slots=True)
@@ -125,9 +126,10 @@ class MultiServerMcpClient:
                 )
                 if exposed_name in self._tools_by_name:
                     raise ValueError(f"Duplicate tool name exposed: {exposed_name}")
+                description = tool.description or f"{server_name}::{tool.name}"
                 self._tools_by_name[exposed_name] = ExposedTool(
                     name=exposed_name,
-                    description=tool.description or f"{server_name}::{tool.name}",
+                    description=augment_tool_description(exposed_name, description),
                     input_schema=tool.inputSchema or {"type": "object", "properties": {}},
                     server_name=server_name,
                     remote_name=tool.name,
