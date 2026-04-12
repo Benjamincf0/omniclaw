@@ -9,6 +9,7 @@ import WelcomeScreen from "./components/WelcomeScreen"
 import HowToUse from "./components/HowToUse"
 import GlancePanel from "./components/GlancePanel"
 import ConsentScreen from "./components/ConsentScreen"
+import SettingsModal from "./components/SettingsModal"
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080"
 
@@ -29,6 +30,7 @@ export default function App() {
   const [showConsent, setShowConsent] = useState(false)
   const [messages, setMessages] = useState([])
   const [isTyping, setIsTyping] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const bottomRef = useRef(null)
 
   const hasMessages = messages.length > 0
@@ -94,7 +96,7 @@ export default function App() {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-textured-parchment">
 
-  <Sidebar activePage={page} onNavigate={setPage} consent={consent} onOpenConsent={openConsent} />
+      <Sidebar activePage={page} onNavigate={setPage} consent={consent} onOpenConsent={openConsent} />
 
       <div className="flex flex-1 items-stretch overflow-hidden bg-textured-parchment">
 
@@ -135,6 +137,26 @@ export default function App() {
           <GlancePanel />
         </div>
 
+//     <div className="flex flex-col h-screen max-w-2xl mx-auto">
+//       <Header onSettingsClick={() => setShowSettings(true)} />
+//       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+
+//       {/* Message area */}
+//       <div className="flex-1 overflow-y-auto py-4">
+//         {!hasMessages && (
+//           <div className="flex flex-col gap-6">
+//             <WelcomeScreen />
+//             <QuickChips onSelect={handleSend} />
+//           </div>
+//         )}
+
+//         {messages.map((msg, i) => (
+//           <Message key={i} role={msg.role} content={msg.content} />
+//         ))}
+        
+//         {isTyping && <TypingIndicator />}
+
+//         <div ref={bottomRef} />
       </div>
 
       {/* Consent modal - shown when user hasn't accepted or on-demand from sidebar */}
