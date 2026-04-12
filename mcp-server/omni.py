@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
+from functools import lru_cache
 
 import httpx as _httpx
 from dotenv import load_dotenv
@@ -48,6 +49,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from auth_manager import authenticate_headless
+from models.calendar import AllCalendarEventsReq, AllCalendarEventsRes
+from models.calendar import get_calendar_events as fetch_calendar_events
+from models.lea_classes import AllLeaClassesReq, AllLeaClassesRes
+from models.lea_classes import get_lea_classes as fetch_lea_classes
 from models.mio import AllMiosReq, AllMiosRes, MioReq, MioRes
 from models.mio import get_all_mios as _get_all_mios
 from models.mio import get_mio as _get_mio_detail
@@ -195,6 +200,30 @@ async def get_news_item(
     return await _get_news_detail(NewsReq(link=link), user_id=user_id)
 
 
+@mcp.tool()
+async def get_calendar_events(
+    num: int = 10, include_past: bool = False
+) -> AllCalendarEventsRes:
+    """Get calendar events from the student's Omnivox homepage."""
+    if num < 1:
+        raise ValueError("num must be at least 1")
+
+    events = await fetch_calendar_events(
+        AllCalendarEventsReq(include_past=include_past)
+    )
+    return AllCalendarEventsRes(events=events.events[:num])
+
+
+@mcp.tool()
+async def get_lea_classes(num: int = 10) -> AllLeaClassesRes:
+    """Get the dashboard info for the student's LEA classes."""
+    if num < 1:
+        raise ValueError("num must be at least 1")
+
+    classes = await fetch_lea_classes(AllLeaClassesReq())
+    return AllLeaClassesRes(classes=classes.classes[:num])
+
+
 # ── Account status tool ───────────────────────────────────────────────────────
 
 
@@ -225,6 +254,8 @@ TOOL_HANDLERS: dict = {
     "send_mio": send_mio,
     "get_news": get_news,
     "get_news_item": get_news_item,
+    "get_calendar_events": get_calendar_events,
+    "get_lea_classes": get_lea_classes,
 }
 
 GEMINI_TOOLS = [
@@ -286,15 +317,59 @@ GEMINI_TOOLS = [
                     required=["link"],
                 ),
             ),
+            types.FunctionDeclaration(
+                name="get_calendar_events",
+                description="Get calendar events from the student's Omnivox homepage.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "num": types.Schema(
+                            type=types.Type.INTEGER,
+                            description="How many calendar events to fetch (default 10).",
+                        ),
+                        "include_past": types.Schema(
+                            type=types.Type.BOOLEAN,
+                            description="Whether to include past events in the results.",
+                        ),
+                    },
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_classes",
+                description="Get the dashboard info for the student's LEA classes.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "num": types.Schema(
+                            type=types.Type.INTEGER,
+                            description="How many classes to fetch (default 10).",
+                        ),
+                    },
+                ),
+            ),
         ]
     )
 ]
 
-gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+class GeminiConfigurationError(RuntimeError):
+    pass
+
+
+@lru_cache(maxsize=1)
+def _get_gemini_client() -> genai.Client:
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise GeminiConfigurationError(
+            "GEMINI_API_KEY is required to use the legacy /chat endpoint."
+        )
+    return genai.Client(api_key=api_key)
 
 SYSTEM_PROMPT = (
     "You are Omniclaw, a helpful assistant for John Abbott College (JAC) students. "
-    "You have access to the student's Omnivox account and can fetch messages and news. "
+    "The student's Omnivox session is already authenticated — you never need a student_id, "
+    "username, password, or any auth parameter. "
+    "Call tools exactly as defined: only pass the arguments listed in the tool schema, nothing else. "
     "Be concise and friendly. Use bullet points for lists. "
     "If you need more information ask a short clarifying question."
 )
@@ -318,6 +393,7 @@ def _build_contents(message: str, history: list[dict]) -> list[types.Content]:
 
 async def _generate(contents: list) -> types.GenerateContentResponse:
     """Call Gemini with exponential backoff on rate limit errors."""
+    gemini_client = _get_gemini_client()
     for attempt in range(3):
         try:
             return await gemini_client.aio.models.generate_content(

@@ -11,7 +11,7 @@ import WelcomeScreen from "./components/WelcomeScreen"
 import AuthPage from "./components/AuthPage"
 import SetupPage from "./components/SetupPage"
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000"
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080"
 
 async function fetchReply(message, history) {
   const res = await fetch(`${BACKEND_URL}/chat`, {
@@ -47,6 +47,7 @@ function LoadingDots() {
 function ChatPage() {
   const [messages, setMessages] = useState([])
   const [isTyping, setIsTyping] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const bottomRef = useRef(null)
   const hasMessages = messages.length > 0
 

@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import parse_qs, urljoin, urlparse
 
-import httpx
 from bs4 import BeautifulSoup, Tag
 from pydantic import BaseModel
 
@@ -15,26 +14,18 @@ _SERVER_ROOT = Path(__file__).resolve().parent.parent
 if str(_SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVER_ROOT))
 
-from auth_manager import authenticate, load_auth  # noqa: E402
-from omnivox_client import omnivox_request_for_user  # noqa: E402
+from auth_manager import load_auth  # noqa: E402
+from omnivox_client import DEFAULT_USER_AGENT, omnivox_request_for_user, omnivox_request_url  # noqa: E402
 
 NEWS_LIST_URL_ENV = "NEWS_LIST_URL"
-NEWS_TOKEN_ENV = "NEWS_TOKEN"
-NEWS_AUTH_HEADER_ENV = "NEWS_AUTH_HEADER"
-NEWS_AUTH_PREFIX_ENV = "NEWS_AUTH_PREFIX"
 NEWS_LINK_SELECTOR_ENV = "NEWS_LINK_SELECTOR"
 NEWS_TITLE_SELECTOR_ENV = "NEWS_TITLE_SELECTOR"
 NEWS_CONTENT_SELECTOR_ENV = "NEWS_CONTENT_SELECTOR"
-REQUEST_TIMEOUT_SECONDS = 20.0
 OMNIVOX_BASE = "https://johnabbott.omnivox.ca"
 DEFAULT_NEWS_LIST_URL = f"{OMNIVOX_BASE}/intr/collegenews/"
 DEFAULT_LIST_LINK_SELECTOR = "a.carte-actualite[href]"
 DEFAULT_TITLE_SELECTOR = "h1.titre"
 DEFAULT_CONTENT_SELECTOR = ".description p, .description li"
-DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
-)
 
 
 class AllNewsReq(BaseModel):
@@ -56,8 +47,6 @@ class NewsRes(BaseModel):
 
 class NewsConfig(BaseModel):
     list_url: str
-    auth_header: str = "Cookie"
-    auth_prefix: str = ""
     link_selector: str | None = None
     title_selector: str | None = None
     content_selector: str | None = None
@@ -81,8 +70,6 @@ def _optional_env(name: str) -> str | None:
 def _load_config() -> NewsConfig:
     return NewsConfig(
         list_url=os.getenv(NEWS_LIST_URL_ENV, DEFAULT_NEWS_LIST_URL).strip(),
-        auth_header=os.getenv(NEWS_AUTH_HEADER_ENV, "Cookie").strip(),
-        auth_prefix=os.getenv(NEWS_AUTH_PREFIX_ENV, ""),
         link_selector=_optional_env(NEWS_LINK_SELECTOR_ENV)
         or DEFAULT_LIST_LINK_SELECTOR,
         title_selector=_optional_env(NEWS_TITLE_SELECTOR_ENV) or DEFAULT_TITLE_SELECTOR,
@@ -92,17 +79,7 @@ def _load_config() -> NewsConfig:
 
 
 def _build_headers(config: NewsConfig) -> dict[str, str]:
-    token = os.getenv(NEWS_TOKEN_ENV, "").strip() or load_auth()
-    if not token:
-        return {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "User-Agent": DEFAULT_USER_AGENT,
-            "Referer": config.list_url,
-        }
-
-    auth_value = f"{config.auth_prefix}{token}" if config.auth_prefix else token
     return {
-        config.auth_header: auth_value,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "User-Agent": DEFAULT_USER_AGENT,
         "Referer": config.list_url,
@@ -112,31 +89,16 @@ def _build_headers(config: NewsConfig) -> dict[str, str]:
 _LOGIN_PATTERNS = ("/login", "identification=true")
 
 
-def _is_auth_redirect(response: httpx.Response) -> bool:
+def _is_auth_redirect(response) -> bool:
     if response.status_code in (401, 403):
         return True
-    if response.status_code in (301, 302, 303, 307, 308):
-        location = response.headers.get("location", "").lower()
-        return any(pat in location for pat in _LOGIN_PATTERNS)
+    if any(pat in str(response.url).lower() for pat in _LOGIN_PATTERNS):
+        return True
+    for hop in response.history:
+        location = hop.headers.get("location", "").lower()
+        if any(pat in location for pat in _LOGIN_PATTERNS):
+            return True
     return False
-
-
-async def _ensure_news_token(target_url: str | None = None) -> str:
-    token = os.getenv(NEWS_TOKEN_ENV, "").strip() or load_auth()
-    if token:
-        return token
-
-    token = await authenticate(target_url=target_url)
-    if not token:
-        raise RuntimeError("Authentication failed — no cookies obtained")
-    return token
-
-
-def _headers_with_token(config: NewsConfig, token: str) -> dict[str, str]:
-    auth_value = f"{config.auth_prefix}{token}" if config.auth_prefix else token
-    headers = _build_headers(config)
-    headers[config.auth_header] = auth_value
-    return headers
 
 
 async def _fetch_html(url: str, config: NewsConfig, user_id: str | None = None) -> str:
@@ -144,34 +106,20 @@ async def _fetch_html(url: str, config: NewsConfig, user_id: str | None = None) 
 
     When *user_id* is provided (multi-tenant mode) the request is made via
     omnivox_request_for_user which reads per-user cookies from user_store.
-    Otherwise falls back to the legacy single-user flow (auth.txt).
+    Otherwise falls back to the single-user flow via omnivox_request_url.
     """
     if user_id:
-        # Multi-tenant path: delegate cookie management to omnivox_client.
         resp = await omnivox_request_for_user(user_id, url.replace(OMNIVOX_BASE, ""))
         resp.raise_for_status()
         return resp.text
 
-    # Legacy single-user path.
-    token = await _ensure_news_token(target_url=url)
-
-    async with httpx.AsyncClient(
-        timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False
-    ) as client:
-        response = await client.get(url, headers=_headers_with_token(config, token))
-        if _is_auth_redirect(response):
-            refreshed_token = await authenticate(target_url=url)
-            if not refreshed_token:
-                raise RuntimeError("Re-authentication failed")
-            response = await client.get(
-                url, headers=_headers_with_token(config, refreshed_token)
-            )
-
-        if _is_auth_redirect(response):
-            raise PermissionError("Omnivox authentication failed after retry")
-
-        response.raise_for_status()
-        return response.text
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"Invalid URL (missing protocol): {url!r}")
+    response = await omnivox_request_url(url, headers=_build_headers(config))
+    if _is_auth_redirect(response):
+        raise PermissionError("Omnivox authentication failed after retry")
+    response.raise_for_status()
+    return response.text
 
 
 def _normalize_text(value: str) -> str:

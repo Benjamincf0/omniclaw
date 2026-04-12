@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TextIO
+
+ROOT = Path(__file__).resolve().parent
+
+MODEL_PROVIDER_ALIASES = {
+    "openai": "openai",
+    "ollama": "ollama",
+    "olama": "ollama",
+    "claude": "claude",
+    "anthropic": "claude",
+    "cloud": "claude",
+    "gemini": "gemini",
+    "google": "gemini",
+}
+
+
+@dataclass(frozen=True)
+class Service:
+    name: str
+    cwd: Path
+    command: tuple[str, ...]
+
+
+SERVICES = (
+    Service("mcp", ROOT / "mcp-server", ("uv", "run", "python", "main.py")),
+    Service(
+        "orchestrator",
+        ROOT / "orchestrator",
+        ("uv", "run", "omniclaw-orchestrator"),
+    ),
+    Service(
+        "discord",
+        ROOT / "discord-bot",
+        ("uv", "run", "omniclaw-discord-bot"),
+    ),
+)
+
+SYNC_SERVICES = SERVICES + (
+    Service("tui", ROOT / "tui-client", ("uv", "run", "omniclaw-tui")),
+)
+
+
+def load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ[key] = value
+
+
+def build_runtime_env() -> dict[str, str]:
+    env = os.environ.copy()
+
+    # Force non-editable installs so uv run doesn't revert to .pth-based editable
+    # mode (which Python 3.13 silently skips for underscore-prefixed .pth files).
+    env.setdefault("UV_NO_EDITABLE", "1")
+
+    env.setdefault("MCP_HOST", "127.0.0.1")
+    env.setdefault("MCP_PORT", "8000")
+    env.setdefault("MCP_TRANSPORT_PATH", "/mcp")
+    env.setdefault("ORCHESTRATOR_HOST", "127.0.0.1")
+    env.setdefault("ORCHESTRATOR_PORT", "8080")
+
+    orchestrator_url = env.get("ORCHESTRATOR_URL", "").strip()
+    if not orchestrator_url:
+        env["ORCHESTRATOR_URL"] = (
+            f"http://127.0.0.1:{env['ORCHESTRATOR_PORT'].strip()}"
+        )
+
+    mcp_server_urls = env.get("MCP_SERVER_URLS", "").strip()
+    if not mcp_server_urls:
+        transport_path = env["MCP_TRANSPORT_PATH"].strip()
+        if not transport_path.startswith("/"):
+            transport_path = f"/{transport_path}"
+        transport_path = transport_path.rstrip("/") or "/mcp"
+        env["MCP_SERVER_URLS"] = (
+            f"omnivox=http://127.0.0.1:{env['MCP_PORT'].strip()}{transport_path}"
+        )
+
+    return env
+
+
+def validate_env(env: dict[str, str]) -> list[str]:
+    raw_provider = env.get("MODEL_PROVIDER", "openai").strip().lower() or "openai"
+    provider = MODEL_PROVIDER_ALIASES.get(raw_provider)
+    if provider is None:
+        missing = ["MODEL_PROVIDER"]
+        if not env.get("DISCORD_BOT_TOKEN", "").strip():
+            missing.append("DISCORD_BOT_TOKEN")
+        return missing
+    required_by_provider = {
+        "openai": ("OPENAI_API_KEY", "OPENAI_MODEL"),
+        "ollama": ("OLLAMA_MODEL",),
+        "claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"),
+        "gemini": ("GEMINI_API_KEY", "GEMINI_MODEL"),
+    }
+
+    missing = [
+        name
+        for name in (*required_by_provider[provider], "DISCORD_BOT_TOKEN")
+        if not env.get(name, "").strip()
+    ]
+    return missing
+
+
+def run_sync(env: dict[str, str]) -> int:
+    for service in SYNC_SERVICES:
+        print(f"[sync] {service.name}: uv sync")
+        result = subprocess.run(
+            ("uv", "sync", "--no-editable"),
+            cwd=service.cwd,
+            env=env,
+            check=False,
+        )
+        if result.returncode != 0:
+            return result.returncode
+    return 0
+
+
+def stream_output(prefix: str, pipe: TextIO) -> None:
+    try:
+        for line in pipe:
+            print(f"[{prefix}] {line.rstrip()}")
+    finally:
+        pipe.close()
+
+
+def terminate_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    if sys.platform == "win32":
+        # On Windows, terminate() only signals the lead process; child
+        # processes (like uvicorn workers) survive as orphans and keep
+        # their ports open.  Use taskkill /T to kill the whole tree.
+        subprocess.call(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+    else:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
+def run_up(env: dict[str, str], *, do_sync: bool) -> int:
+    missing = validate_env(env)
+    if missing:
+        joined = ", ".join(missing)
+        print(f"Missing required environment variables: {joined}", file=sys.stderr)
+        print(
+            "Create a root .env from .env.example, then run `./omniclaw up`.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if do_sync:
+        code = run_sync(env)
+        if code != 0:
+            return code
+
+    processes: list[tuple[Service, subprocess.Popen[str]]] = []
+    readers: list[threading.Thread] = []
+    stop_requested = False
+
+    def request_stop(signum: int, _frame: object | None) -> None:
+        nonlocal stop_requested
+        if stop_requested:
+            return
+        stop_requested = True
+        print(f"\n[omniclaw] received signal {signum}, stopping services...")
+        for _, process in processes:
+            terminate_process(process)
+
+    previous_sigint = signal.signal(signal.SIGINT, request_stop)
+    previous_sigterm = signal.signal(signal.SIGTERM, request_stop)
+    exit_code = 0
+
+    try:
+        for service in SERVICES:
+            process = subprocess.Popen(
+                service.command,
+                cwd=service.cwd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            processes.append((service, process))
+            assert process.stdout is not None
+            reader = threading.Thread(
+                target=stream_output,
+                args=(service.name, process.stdout),
+                daemon=True,
+            )
+            reader.start()
+            readers.append(reader)
+
+        print("[omniclaw] stack is starting. Press Ctrl+C to stop.")
+
+        while not stop_requested:
+            for service, process in processes:
+                code = process.poll()
+                if code is None:
+                    continue
+                if code != 0:
+                    print(
+                        f"[omniclaw] {service.name} exited with status {code}. "
+                        "Stopping the remaining services...",
+                        file=sys.stderr,
+                    )
+                    exit_code = code
+                stop_requested = True
+                break
+            time.sleep(0.5)
+    finally:
+        for _, process in reversed(processes):
+            terminate_process(process)
+        for reader in readers:
+            reader.join(timeout=1)
+        signal.signal(signal.SIGINT, previous_sigint)
+        signal.signal(signal.SIGTERM, previous_sigterm)
+
+    return exit_code
+
+
+def run_tui(env: dict[str, str], *, do_sync: bool) -> int:
+    service = Service("tui", ROOT / "tui-client", ("uv", "run", "omniclaw-tui"))
+    if do_sync:
+        print("[sync] tui: uv sync")
+        result = subprocess.run(
+            ("uv", "sync", "--no-editable"),
+            cwd=service.cwd,
+            env=env,
+            check=False,
+        )
+        if result.returncode != 0:
+            return result.returncode
+
+    return subprocess.call(service.command, cwd=service.cwd, env=env)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="omniclaw",
+        description="Run the Omniclaw MCP server, orchestrator, and Discord bot together.",
+    )
+    parser.add_argument(
+        "--env-file",
+        default=".env",
+        help="Path to the shared environment file relative to the repo root.",
+    )
+
+    subparsers = parser.add_subparsers(dest="command")
+
+    up = subparsers.add_parser("up", help="Start all three services together.")
+    up.add_argument(
+        "--no-sync",
+        action="store_true",
+        help="Skip `uv sync` before starting the services.",
+    )
+
+    subparsers.add_parser("sync", help="Install or update dependencies for all services.")
+    subparsers.add_parser("env", help="Print the derived local service URLs.")
+    tui = subparsers.add_parser("tui", help="Launch the terminal UI client.")
+    tui.add_argument(
+        "--no-sync",
+        action="store_true",
+        help="Skip `uv sync` before starting the TUI client.",
+    )
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    env_path = Path(args.env_file)
+    if not env_path.is_absolute():
+        env_path = ROOT / env_path
+
+    load_env_file(env_path)
+    env = build_runtime_env()
+
+    command = args.command or "up"
+    if command == "sync":
+        return run_sync(env)
+    if command == "env":
+        print(f"MCP_SERVER_URLS={env['MCP_SERVER_URLS']}")
+        print(f"ORCHESTRATOR_URL={env['ORCHESTRATOR_URL']}")
+        return 0
+    if command == "tui":
+        return run_tui(env, do_sync=not args.no_sync)
+    return run_up(env, do_sync=not args.no_sync)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

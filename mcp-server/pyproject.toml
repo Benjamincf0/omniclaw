@@ -19,4 +19,5 @@ dependencies = [
     # Required by FastMCP's OAuthProxy for the upstream OAuth dance
     "authlib>=1.3.0",
     "itsdangerous>=2.2.0",
+    "pyinstaller>=6.19.0",
 ]

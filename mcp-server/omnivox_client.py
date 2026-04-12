@@ -2,7 +2,7 @@
 Authenticated HTTP client for Omnivox.
 
 Two modes:
-  - Legacy (single-user): uses auth.txt via load_auth() / authenticate().
+  - Single-user: uses cookie jar from auth.txt / auth_state.json via authenticate().
   - Multi-tenant: takes an explicit user_id and reads cookies from user_store.
 
 Both modes automatically detect auth failures and trigger re-login via a
@@ -11,38 +11,181 @@ headless browser popup, then retry the request once.
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 from auth_manager import (
     authenticate,
     authenticate_for_user,
+    clear_auth_state,
     load_auth,
-    LOGIN_PAGE_PATTERNS,
+    load_auth_cookies,
+    save_auth_cookies,
 )
 from user_store import get_omnivox_cookies, save_omnivox_cookies
 
 OMNIVOX_BASE = "https://johnabbott.omnivox.ca"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+)
+LOGIN_PAGE_PATTERNS = (
+    "/login",
+    "identification=true",
+)
+
+
+def _is_login_url(url: str) -> bool:
+    lower = url.lower()
+    return any(pattern in lower for pattern in LOGIN_PAGE_PATTERNS)
+
+
+def _cookie_jar() -> httpx.Cookies:
+    jar = httpx.Cookies()
+    for cookie in load_auth_cookies() or []:
+        name = cookie.get("name")
+        value = cookie.get("value")
+        if not name or value is None:
+            continue
+        domain = cookie.get("domain")
+        path = cookie.get("path") or "/"
+        if domain:
+            jar.set(name, value, domain=domain, path=path)
+        else:
+            jar.set(name, value, path=path)
+    return jar
+
+
+def _serialize_cookie_jar(cookies: httpx.Cookies) -> list[dict[str, Any]]:
+    serialized: list[dict[str, Any]] = []
+    for cookie in cookies.jar:
+        item: dict[str, Any] = {
+            "name": cookie.name,
+            "value": cookie.value,
+            "path": cookie.path or "/",
+        }
+        if cookie.domain:
+            item["domain"] = cookie.domain
+        if cookie.expires is not None:
+            item["expires"] = cookie.expires
+        if cookie.secure:
+            item["secure"] = True
+        if cookie.has_nonstandard_attr("HttpOnly"):
+            item["httpOnly"] = True
+        same_site = cookie.get_nonstandard_attr("SameSite")
+        if same_site:
+            item["sameSite"] = same_site
+        serialized.append(item)
+    return serialized
+
+
+def _looks_like_login_page(response: httpx.Response) -> bool:
+    try:
+        content_type = response.headers.get("content-type", "").lower()
+        if "html" not in content_type:
+            return False
+        body = response.text.lower()
+    except Exception:
+        return False
+    return "identification=true" in body or 'name="password"' in body
 
 
 def _is_auth_failure(response: httpx.Response) -> bool:
     """Detect if a response indicates the session has expired or is invalid."""
     if response.status_code in (401, 403):
         return True
-    if response.status_code in (301, 302, 303, 307, 308):
-        location = response.headers.get("location", "")
-        if any(pat.lower() in location.lower() for pat in LOGIN_PAGE_PATTERNS):
+    if _is_login_url(str(response.url)):
+        return True
+    for hop in response.history:
+        location = hop.headers.get("location", "")
+        if location and _is_login_url(location):
             return True
+    if _looks_like_login_page(response):
+        return True
     return False
 
 
-# ── Legacy single-user helpers (kept for backward-compat with test files) ─────
+def _resolve_url(path_or_url: str) -> str:
+    if path_or_url.startswith(("http://", "https://")):
+        return path_or_url
+    return f"{OMNIVOX_BASE}{path_or_url}"
 
 
-async def ensure_authenticated() -> str:
-    """Return valid cookies for the legacy single-user flow (auth.txt)."""
+def _default_headers() -> dict[str, str]:
+    return {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "User-Agent": DEFAULT_USER_AGENT,
+    }
+
+
+async def _request_with_saved_session(
+    url: str,
+    method: str,
+    *,
+    follow_redirects: bool,
+    headers: dict[str, str],
+    **kwargs,
+) -> httpx.Response:
+    async with httpx.AsyncClient(
+        verify=False,
+        cookies=_cookie_jar(),
+        follow_redirects=follow_redirects,
+    ) as client:
+        response = await client.request(method, url, headers=headers, **kwargs)
+        save_auth_cookies(_serialize_cookie_jar(client.cookies))
+        return response
+
+
+async def ensure_authenticated(target_url: str | None = None) -> str:
+    """Return valid cookies, prompting browser login if none are stored."""
     cookies = load_auth()
     if cookies:
         return cookies
-    return await authenticate()
+    return await authenticate(target_url=target_url)
+
+
+async def omnivox_request_url(
+    path_or_url: str,
+    method: str = "GET",
+    **kwargs,
+) -> httpx.Response:
+    """
+    Make an authenticated request to Omnivox using a persistent cookie jar.
+
+    Omnivox sets extra cookies while crossing modules. Those `Set-Cookie`
+    responses are persisted so later requests behave more like a real browser.
+    """
+    url = _resolve_url(path_or_url)
+    await ensure_authenticated(target_url=url)
+
+    follow_redirects = kwargs.pop("follow_redirects", True)
+    caller_headers = kwargs.pop("headers", {})
+    headers = _default_headers()
+    headers.update(caller_headers)
+
+    response = await _request_with_saved_session(
+        url,
+        method,
+        follow_redirects=follow_redirects,
+        headers=headers,
+        **kwargs,
+    )
+
+    if _is_auth_failure(response):
+        clear_auth_state(include_profile=False)
+        await authenticate(target_url=url, restore_saved_cookies=False)
+        response = await _request_with_saved_session(
+            url,
+            method,
+            follow_redirects=follow_redirects,
+            headers=headers,
+            **kwargs,
+        )
+
+    if _is_auth_failure(response):
+        raise PermissionError("Omnivox authentication failed after retry")
+
+    return response
 
 
 async def omnivox_request(
@@ -50,35 +193,7 @@ async def omnivox_request(
     method: str = "GET",
     **kwargs,
 ) -> httpx.Response:
-    """
-    Make an authenticated request to Omnivox (legacy single-user mode).
-
-    If the response indicates an auth failure (401/403 or redirect to login),
-    opens a browser popup for the user to re-login, then retries once.
-    """
-    url = f"{OMNIVOX_BASE}{path}"
-    cookies_str = await ensure_authenticated()
-    if not cookies_str:
-        raise RuntimeError("Authentication failed — no cookies obtained")
-
-    headers = kwargs.pop("headers", {})
-    headers["Cookie"] = cookies_str
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.request(
-            method, url, headers=headers, follow_redirects=False, **kwargs
-        )
-
-        if _is_auth_failure(resp):
-            cookies_str = await authenticate(target_url=url)
-            if not cookies_str:
-                raise RuntimeError("Re-authentication failed")
-            headers["Cookie"] = cookies_str
-            resp = await client.request(
-                method, url, headers=headers, follow_redirects=False, **kwargs
-            )
-
-    return resp
+    return await omnivox_request_url(path, method=method, **kwargs)
 
 
 # ── Multi-tenant per-user request ─────────────────────────────────────────────
@@ -116,7 +231,6 @@ async def omnivox_request_for_user(
         )
 
         if _is_auth_failure(resp):
-            # Session expired — re-authenticate and save the new cookies.
             new_cookies = await authenticate_for_user(user_id, target_url=url)
             if not new_cookies:
                 raise PermissionError(

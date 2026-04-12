@@ -1,2 +1,26 @@
 mcp-server/.env
 mcp-server/user_tokens.json
+
+# Build artifacts
+mcp-server/static/
+mcp-server/build/
+mcp-server/dist/
+installer/Output/
+installer/OllamaSetup.exe
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# Local credentials and auth artifacts
+auth.txt
+
+.env*
+*.env
