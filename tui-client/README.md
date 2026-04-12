@@ -22,3 +22,14 @@ The client talks to the same orchestrator HTTP API used by the Discord bot:
 
 - `Enter` sends the current prompt
 - `Ctrl+C` quits
+
+## Commands
+
+- `/help` shows the command list inside the TUI
+- `/status` checks the orchestrator health endpoint
+- `/reset` clears the current remote session
+- `/provider <name>` sets a provider override for future messages
+- `/model <name>` sets a model override for future messages
+- `/provider default` and `/model default` clear overrides
+- `/session new` starts a fresh local session id
+- `/quit` exits the app
