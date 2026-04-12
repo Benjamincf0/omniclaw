@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from "react"
 import { useAuth0 } from "@auth0/auth0-react"
 import { useNavigate } from "react-router-dom"
+import { Settings } from "lucide-react"
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000"
 
-export default function Header() {
+export default function Header({ onSettingsClick }) {
   const { isAuthenticated, user, logout, getAccessTokenSilently } = useAuth0()
   const navigate = useNavigate()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -46,23 +47,48 @@ export default function Header() {
   }
 
   return (
-    <header className="flex items-center justify-between px-6 py-4 border-b border-[#2a2a32] shrink-0">
-      {/* Left: wordmark */}
-      <div className="flex items-center gap-2.5">
-        <span className="font-semibold text-[#e8e8f0] tracking-tight text-lg">
-          Omniclaw
-        </span>
-        <span className="text-xs text-[#6b6b7a] font-medium bg-[#1a1a1f] border border-[#2a2a32] px-2 py-0.5 rounded-full">
-          JAC
-        </span>
+    <header
+      className="flex items-center justify-between px-6 py-4 shrink-0"
+      style={{
+        backgroundColor: "var(--bg-card)",
+        borderBottom: "1px solid var(--border)",
+      }}
+    >
+      <div>
+        <h1
+          className="text-base font-semibold leading-tight"
+          style={{
+            fontFamily: "'DM Serif Display', serif",
+            color: "var(--navy)",
+            letterSpacing: "-0.01em",
+          }}
+        >
+          Chat
+        </h1>
+        <p
+          className="text-[11px] leading-tight"
+          style={{ color: "var(--text-muted)", letterSpacing: "0.04em" }}
+        >
+          Ask me anything about Omnivox
+        </p>
       </div>
 
-      {/* Right: live indicator + user menu */}
+      {/* Right: live indicator + settings + user menu */}
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-1.5 text-xs text-[#6b6b7a]">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
           Live
         </div>
+
+        {onSettingsClick && (
+          <button
+            onClick={onSettingsClick}
+            className="text-[#6b6b7a] hover:text-[#e8e8f0] transition-colors cursor-pointer"
+            aria-label="Settings"
+          >
+            <Settings size={16} />
+          </button>
+        )}
 
         {isAuthenticated && user && (
           <div className="relative" ref={menuRef}>

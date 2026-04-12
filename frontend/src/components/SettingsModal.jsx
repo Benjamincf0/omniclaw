@@ -1,18 +1,22 @@
 import { useState, useEffect } from "react"
-import { X, Eye, EyeOff, Save, Loader2, CheckCircle, AlertCircle } from "lucide-react"
+import { X, Eye, EyeOff, Save, Loader2, CheckCircle, AlertCircle, RefreshCw } from "lucide-react"
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000"
+// Settings API is on the MCP server (port 8000), not the orchestrator (8080)
+const MCP_SERVER_URL = import.meta.env.VITE_MCP_SERVER_URL ?? "http://localhost:8000"
+const ORCHESTRATOR_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080"
+const SETTINGS_URL = import.meta.env.VITE_SETTINGS_URL ?? ""
 
 export default function SettingsModal({ onClose }) {
   const [fields, setFields] = useState([])
   const [values, setValues] = useState({})
   const [revealed, setRevealed] = useState({})
   const [saving, setSaving] = useState(false)
+  const [reloading, setReloading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState(null)
 
   useEffect(() => {
-    fetch(`${BACKEND_URL}/api/settings`)
+    fetch(`${MCP_SERVER_URL}/api/settings`)
       .then((r) => r.json())
       .then((data) => {
         setFields(data.fields)
@@ -33,25 +37,56 @@ export default function SettingsModal({ onClose }) {
     setSaving(true)
     setMessage(null)
     try {
-      const res = await fetch(`${BACKEND_URL}/api/settings`, {
+      // 1. Save settings to .env
+      const res = await fetch(`${MCP_SERVER_URL}/api/settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: values }),
       })
-      if (!res.ok) throw new Error()
-      const refreshed = await fetch(`${BACKEND_URL}/api/settings`).then((r) => r.json())
-      setFields(refreshed.fields)
-      const vals = {}
-      refreshed.fields.forEach((f) => {
-        vals[f.key] = f.secret ? "" : f.value
-      })
-      setValues(vals)
-      setRevealed({})
-      setMessage({ type: "success", text: "Saved! Orchestrator/Discord changes need a restart." })
+      if (!res.ok) throw new Error("Failed to save")
+      
+      // 2. Hot reload orchestrator to pick up changes
+      let reloadResult = null
+      try {
+        const reloadRes = await fetch(`${ORCHESTRATOR_URL}/reload`, { method: "POST" })
+        if (reloadRes.ok) {
+          reloadResult = await reloadRes.json()
+        }
+      } catch {
+        // Reload failed, but save succeeded
+      }
+      
+      // 3. Show success message
+      const successMsg = reloadResult 
+        ? `Saved & reloaded! Provider: ${reloadResult.new_provider}`
+        : "Settings saved! Restart orchestrator to apply changes."
+      setMessage({ type: "success", text: successMsg })
+      
+      // Close modal after a short delay to show success message
+      setTimeout(() => {
+        onClose()
+      }, 1500)
     } catch {
       setMessage({ type: "error", text: "Failed to save settings" })
-    } finally {
       setSaving(false)
+    }
+  }
+
+  const handleReload = async () => {
+    setReloading(true)
+    setMessage(null)
+    try {
+      const res = await fetch(`${ORCHESTRATOR_URL}/reload`, { method: "POST" })
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setMessage({ 
+        type: "success", 
+        text: `Reloaded! Provider: ${data.old_provider} → ${data.new_provider}` 
+      })
+    } catch {
+      setMessage({ type: "error", text: "Failed to reload orchestrator" })
+    } finally {
+      setReloading(false)
     }
   }
 
@@ -157,14 +192,25 @@ export default function SettingsModal({ onClose }) {
                 {message.text}
               </div>
             )}
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="ml-auto flex items-center gap-2 px-4 py-2 rounded-lg bg-[#6c63ff] hover:bg-[#7d75ff] disabled:opacity-50 text-white text-sm font-medium transition-all cursor-pointer"
-            >
-              {saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />}
-              Save
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                onClick={handleReload}
+                disabled={reloading}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#2a2a32] hover:bg-[#3a3a42] disabled:opacity-50 text-[#a0a0b0] hover:text-[#e8e8f0] text-sm font-medium transition-all cursor-pointer"
+                title="Reload orchestrator config"
+              >
+                <RefreshCw className={reloading ? "animate-spin" : ""} size={14} />
+                Reload
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#6c63ff] hover:bg-[#7d75ff] disabled:opacity-50 text-white text-sm font-medium transition-all cursor-pointer"
+              >
+                {saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />}
+                Save
+              </button>
+            </div>
           </div>
         )}
       </div>

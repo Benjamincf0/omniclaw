@@ -53,7 +53,9 @@ omniclaw/
 │   ├── user_store.py      # JSON file store: Auth0 sub → Omnivox cookie string
 │   ├── models/
 │   │   ├── news.py        # Pydantic models + BeautifulSoup news scraping
-│   │   └── mio.py         # Pydantic models + BeautifulSoup MIO scraping
+│   │   ├── mio.py         # Pydantic models + BeautifulSoup MIO scraping
+│   │   ├── lea_classes.py # Pydantic models + LEA class dashboard scraping
+│   │   └── lea_details.py # Pydantic models + LEA detail page scraping
 │   ├── user_tokens.json   # Runtime: per-user Omnivox cookies (gitignored)
 │   ├── auth.txt           # Runtime: legacy single-user cookie (gitignored)
 │   └── .env               # Secrets (gitignored)
@@ -62,7 +64,9 @@ omniclaw/
         ├── main.jsx       # Entry point: Auth0Provider + App
         ├── App.jsx        # Router: /auth → /setup|/link-omnivox → / (chat)
         └── components/    # AuthPage, SetupPage, Header, Message, ChatInput,
-                           # QuickChips, WelcomeScreen, TypingIndicator
+                           # QuickChips, WelcomeScreen, TypingIndicator,
+                           # Sidebar, HowToUse, GlancePanel, ConsentScreen,
+                           # SettingsModal
 ```
 
 ### Key runtime behavior
@@ -206,3 +210,9 @@ docker run -p 8000:8000 --env-file mcp-server/.env omniclaw-mcp
 ```
 
 Note: the Dockerfile is currently outdated (wrong Python version, missing source files). Do not rely on it without fixing it first.
+
+---
+
+## Guidelines
+
+- Make incremental commits rather than a massive singular commit.

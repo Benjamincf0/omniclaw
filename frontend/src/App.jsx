@@ -2,12 +2,17 @@ import { useState, useRef, useEffect } from "react"
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
 import { useAuth0 } from "@auth0/auth0-react"
 
+import Sidebar from "./components/Sidebar"
 import Header from "./components/Header"
 import Message from "./components/Message"
 import TypingIndicator from "./components/TypingIndicator"
 import ChatInput from "./components/ChatInput"
 import QuickChips from "./components/QuickChips"
 import WelcomeScreen from "./components/WelcomeScreen"
+import HowToUse from "./components/HowToUse"
+import GlancePanel from "./components/GlancePanel"
+import ConsentScreen from "./components/ConsentScreen"
+import SettingsModal from "./components/SettingsModal"
 import AuthPage from "./components/AuthPage"
 import SetupPage from "./components/SetupPage"
 
@@ -35,6 +40,10 @@ function LoadingDots() {
 
 function ChatPage() {
   const { getAccessTokenSilently } = useAuth0()
+  const [page, setPage] = useState("chat")
+  const [consent, setConsent] = useState(false)
+  const [showConsent, setShowConsent] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const [messages, setMessages] = useState([])
   const [isTyping, setIsTyping] = useState(false)
   const bottomRef = useRef(null)
@@ -44,12 +53,28 @@ function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, isTyping])
 
+  // load consent from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("omniclaw:consent")
+      const accepted = saved === "true"
+      setConsent(accepted)
+      if (!accepted) setShowConsent(true)
+    } catch (e) {
+      // ignore
+    }
+  }, [])
+
   const handleSend = async (text) => {
-    const userMessage = { role: "user", content: text }
-    setMessages((prev) => [...prev, userMessage])
+    if (!consent) {
+      setShowConsent(true)
+      return
+    }
+    const userMessage = { role: "user", content: text, timestamp: Date.now() }
+    const updatedMessages = [...messages, userMessage]
+    setMessages(updatedMessages)
     setIsTyping(true)
 
-    // Build history in Gemini format (exclude the current message)
     const history = messages.map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
       parts: [{ text: m.content }],
@@ -67,34 +92,63 @@ function ChatPage() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail ?? `Server error ${res.status}`)
-      setMessages((prev) => [...prev, { role: "assistant", content: data.reply }])
+      setMessages((prev) => [...prev, { role: "assistant", content: data.reply, timestamp: Date.now() }])
     } catch {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: "Something went wrong. Is the server running?" },
+        { role: "assistant", content: "Something went wrong. Is the server running?", timestamp: Date.now() },
       ])
     } finally {
       setIsTyping(false)
     }
   }
 
+  const handleAcceptConsent = () => {
+    try {
+      localStorage.setItem("omniclaw:consent", "true")
+    } catch (e) {
+      // ignore
+    }
+    setConsent(true)
+    setShowConsent(false)
+  }
+
+  const openConsent = () => setShowConsent(true)
+
   return (
-    <div className="flex flex-col h-screen max-w-2xl mx-auto">
-      <Header />
-      <div className="flex-1 overflow-y-auto py-4">
-        {!hasMessages && (
-          <div className="flex flex-col gap-6">
-            <WelcomeScreen />
-            <QuickChips onSelect={handleSend} />
-          </div>
+    <div className="flex h-screen w-screen overflow-hidden bg-textured-parchment">
+      <Sidebar activePage={page} onNavigate={setPage} consent={consent} onOpenConsent={openConsent} />
+
+      {/* Main content */}
+      <div className="flex flex-col flex-1 min-w-0 h-full overflow-hidden">
+        {page === "chat" && (
+          <>
+            <Header onSettingsClick={() => setShowSettings(true)} />
+            <div className="flex-1 overflow-y-auto py-4 bg-textured-warm">
+              {!hasMessages && (
+                <div className="flex flex-col gap-6">
+                  <WelcomeScreen />
+                  <QuickChips onSelect={handleSend} />
+                </div>
+              )}
+              {messages.map((msg, i) => (
+                <Message key={i} role={msg.role} content={msg.content} timestamp={msg.timestamp} />
+              ))}
+              {isTyping && <TypingIndicator />}
+              <div ref={bottomRef} />
+            </div>
+            <ChatInput onSend={handleSend} disabled={isTyping || !consent} />
+          </>
         )}
-        {messages.map((msg, i) => (
-          <Message key={i} role={msg.role} content={msg.content} />
-        ))}
-        {isTyping && <TypingIndicator />}
-        <div ref={bottomRef} />
+
+        {page === "howto" && <HowToUse />}
       </div>
-      <ChatInput onSend={handleSend} disabled={isTyping} />
+
+      {/* Right panel */}
+      <GlancePanel />
+
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showConsent && <ConsentScreen onAccept={handleAcceptConsent} />}
     </div>
   )
 }
@@ -147,8 +201,7 @@ export default function App() {
           element={isAuthenticated ? <Navigate to="/" replace /> : <AuthPage />}
         />
 
-        {/* Protected: Omnivox credential setup (also reachable via /link-omnivox
-            so MCP clients can direct users here by opening the frontend URL) */}
+        {/* Protected: Omnivox credential setup */}
         <Route
           path="/setup"
           element={isAuthenticated ? <SetupPage /> : <Navigate to="/auth" replace />}

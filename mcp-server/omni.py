@@ -30,9 +30,12 @@ as the MCP server):
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import secrets
+import sys
 from functools import lru_cache
+from pathlib import Path
 
 import httpx as _httpx
 from dotenv import load_dotenv
@@ -48,11 +51,32 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
+
 from auth_manager import authenticate_headless
 from models.calendar import AllCalendarEventsReq, AllCalendarEventsRes
 from models.calendar import get_calendar_events as fetch_calendar_events
 from models.lea_classes import AllLeaClassesReq, AllLeaClassesRes
 from models.lea_classes import get_lea_classes as fetch_lea_classes
+from models.lea_details import (
+    LeaAssignmentContentRes,
+    LeaAnnouncementRes,
+    LeaAssignmentsRes,
+    LeaDocumentsRes,
+    LeaGradesRes,
+    LeaLinkReq,
+)
+from models.lea_details import get_lea_assignment_content as fetch_lea_assignment_content
+from models.lea_details import get_lea_announcement as fetch_lea_announcement
+from models.lea_details import get_lea_assignments as fetch_lea_assignments
+from models.lea_details import get_lea_documents as fetch_lea_documents
+from models.lea_details import get_lea_grades as fetch_lea_grades
 from models.mio import AllMiosReq, AllMiosRes, MioReq, MioRes
 from models.mio import get_all_mios as _get_all_mios
 from models.mio import get_mio as _get_mio_detail
@@ -229,6 +253,56 @@ async def get_lea_classes(
     return AllLeaClassesRes(classes=classes.classes[:num])
 
 
+@mcp.tool()
+async def get_lea_documents(
+    link: str,
+    token: AccessToken = CurrentAccessToken(),
+) -> LeaDocumentsRes:
+    """Fetch the documents and videos page for a LEA class using the section URL from get_lea_classes."""
+    _get_user_id(token)  # ensure authenticated
+    return await fetch_lea_documents(LeaLinkReq(link=link))
+
+
+@mcp.tool()
+async def get_lea_assignments(
+    link: str,
+    token: AccessToken = CurrentAccessToken(),
+) -> LeaAssignmentsRes:
+    """Fetch the assignments page for a LEA class using the section URL from get_lea_classes."""
+    _get_user_id(token)  # ensure authenticated
+    return await fetch_lea_assignments(LeaLinkReq(link=link))
+
+
+@mcp.tool()
+async def get_lea_assignment_content(
+    link: str,
+    token: AccessToken = CurrentAccessToken(),
+) -> LeaAssignmentContentRes:
+    """Fetch one LEA assignment detail/submission page using an assignment link from get_lea_assignments."""
+    _get_user_id(token)  # ensure authenticated
+    return await fetch_lea_assignment_content(LeaLinkReq(link=link))
+
+
+@mcp.tool()
+async def get_lea_grades(
+    link: str,
+    token: AccessToken = CurrentAccessToken(),
+) -> LeaGradesRes:
+    """Fetch the detailed evaluation grades page for a LEA class using the section URL from get_lea_classes."""
+    _get_user_id(token)  # ensure authenticated
+    return await fetch_lea_grades(LeaLinkReq(link=link))
+
+
+@mcp.tool()
+async def get_lea_announcement(
+    link: str,
+    token: AccessToken = CurrentAccessToken(),
+) -> LeaAnnouncementRes:
+    """Fetch a LEA class announcement using an announcement URL returned by get_lea_classes."""
+    _get_user_id(token)  # ensure authenticated
+    return await fetch_lea_announcement(LeaLinkReq(link=link))
+
+
 # ── Account status tool ───────────────────────────────────────────────────────
 
 
@@ -290,6 +364,21 @@ def _make_chat_handlers(user_id: str) -> dict:
         result = await fetch_lea_classes(AllLeaClassesReq(), user_id=user_id)
         return AllLeaClassesRes(classes=result.classes[:num]).model_dump()
 
+    async def _get_lea_documents(link: str) -> dict:
+        return (await fetch_lea_documents(LeaLinkReq(link=link))).model_dump()
+
+    async def _get_lea_assignments(link: str) -> dict:
+        return (await fetch_lea_assignments(LeaLinkReq(link=link))).model_dump()
+
+    async def _get_lea_assignment_content(link: str) -> dict:
+        return (await fetch_lea_assignment_content(LeaLinkReq(link=link))).model_dump()
+
+    async def _get_lea_grades(link: str) -> dict:
+        return (await fetch_lea_grades(LeaLinkReq(link=link))).model_dump()
+
+    async def _get_lea_announcement(link: str) -> dict:
+        return (await fetch_lea_announcement(LeaLinkReq(link=link))).model_dump()
+
     return {
         "get_mio": _get_mio,
         "send_mio": _send_mio,
@@ -297,6 +386,11 @@ def _make_chat_handlers(user_id: str) -> dict:
         "get_news_item": _get_news_item,
         "get_calendar_events": _get_calendar_events,
         "get_lea_classes": _get_lea_classes,
+        "get_lea_documents": _get_lea_documents,
+        "get_lea_assignments": _get_lea_assignments,
+        "get_lea_assignment_content": _get_lea_assignment_content,
+        "get_lea_grades": _get_lea_grades,
+        "get_lea_announcement": _get_lea_announcement,
     }
 
 GEMINI_TOOLS = [
@@ -386,6 +480,76 @@ GEMINI_TOOLS = [
                             description="How many classes to fetch (default 10).",
                         ),
                     },
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_documents",
+                description="Fetch the documents and videos page for a LEA class using the section URL returned by get_lea_classes.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "link": types.Schema(
+                            type=types.Type.STRING,
+                            description="The documents/videos page URL from get_lea_classes.",
+                        ),
+                    },
+                    required=["link"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_assignments",
+                description="Fetch the assignments list page for a LEA class using the section URL returned by get_lea_classes.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "link": types.Schema(
+                            type=types.Type.STRING,
+                            description="The assignments page URL from get_lea_classes.",
+                        ),
+                    },
+                    required=["link"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_assignment_content",
+                description="Fetch one LEA assignment detail/submission page using an assignment link returned by get_lea_assignments.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "link": types.Schema(
+                            type=types.Type.STRING,
+                            description="The assignment detail URL from get_lea_assignments.",
+                        ),
+                    },
+                    required=["link"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_grades",
+                description="Fetch the detailed evaluation grades page for a LEA class using the section URL returned by get_lea_classes.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "link": types.Schema(
+                            type=types.Type.STRING,
+                            description="The grades page URL from get_lea_classes.",
+                        ),
+                    },
+                    required=["link"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_lea_announcement",
+                description="Fetch one full LEA announcement using an announcement URL returned by get_lea_classes.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "link": types.Schema(
+                            type=types.Type.STRING,
+                            description="The announcement URL from get_lea_classes.",
+                        ),
+                    },
+                    required=["link"],
                 ),
             ),
         ]
@@ -742,6 +906,181 @@ _CORS_MIDDLEWARE = [
         allow_headers=["*"],
     )
 ]
+
+
+# ── Settings API ─────────────────────────────────────────────────────────────
+
+def _config_path() -> Path:
+    """Writable config file in project root (shared with orchestrator)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "omniclaw.env"
+    # Go up from mcp-server/omni.py to project root
+    return Path(__file__).resolve().parent.parent / ".env"
+
+
+def _read_persistent_config() -> dict[str, str]:
+    path = _config_path()
+    config: dict[str, str] = {}
+    if not path.exists():
+        return config
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if sep:
+            config[key.strip()] = value.strip()
+    return config
+
+
+def _write_persistent_config(config: dict[str, str]) -> None:
+    """Update .env file, preserving comments and unmanaged keys."""
+    path = _config_path()
+    existing_lines = []
+    updated_keys = set()
+    changes = []  # Track changes for logging
+
+    # Read existing config for comparison
+    old_config = _read_persistent_config()
+
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            # Preserve empty lines and comments
+            if not stripped or stripped.startswith("#"):
+                existing_lines.append(line)
+                continue
+            # Parse key=value
+            key, sep, old_value = stripped.partition("=")
+            key = key.strip()
+            old_value = old_value.strip()
+            if sep and key in config:
+                new_value = config[key]
+                # Update this key with new value
+                existing_lines.append(f"{key}={new_value}")
+                updated_keys.add(key)
+                # Log if value changed
+                if old_value != new_value:
+                    # Mask sensitive values
+                    is_secret = any(s.get("key") == key and s.get("secret") for s in SETTINGS_SCHEMA)
+                    old_display = _mask(old_value) if is_secret and old_value else old_value or "(empty)"
+                    new_display = _mask(new_value) if is_secret and new_value else new_value or "(empty)"
+                    changes.append(f"  {key}: {old_display} → {new_display}")
+            else:
+                # Keep unchanged
+                existing_lines.append(line)
+                if sep:
+                    updated_keys.add(key)
+
+    # Add new keys that weren't in the file
+    for key, value in config.items():
+        if key not in updated_keys and value:
+            existing_lines.append(f"{key}={value}")
+            is_secret = any(s.get("key") == key and s.get("secret") for s in SETTINGS_SCHEMA)
+            display_value = _mask(value) if is_secret else value
+            changes.append(f"  {key}: (new) → {display_value}")
+
+    path.write_text("\n".join(existing_lines) + "\n", encoding="utf-8")
+
+    # Log the changes
+    if changes:
+        logger.info(f"Settings updated in {path}:")
+        for change in changes:
+            logger.info(change)
+    else:
+        logger.info(f"Settings saved (no changes) to {path}")
+
+
+def _mask(value: str) -> str:
+    if len(value) <= 8:
+        return "\u2022" * 8
+    return value[:4] + "\u2022\u2022\u2022\u2022" + value[-4:]
+
+
+SETTINGS_SCHEMA: list[dict] = [
+    {"key": "OMNIVOX_ID",        "label": "Omnivox Student ID",  "secret": False, "group": "Omnivox"},
+    {"key": "OMNIVOX_PASSWORD",  "label": "Omnivox Password",    "secret": True,  "group": "Omnivox"},
+    {"key": "GEMINI_API_KEY",    "label": "Gemini API Key",      "secret": True,  "group": "Chat AI"},
+    {"key": "MODEL_PROVIDER",    "label": "Model Provider",      "secret": False, "group": "Orchestrator",
+     "type": "select", "options": ["openai", "ollama", "claude", "gemini"]},
+    {"key": "OPENAI_API_KEY",    "label": "OpenAI API Key",      "secret": True,  "group": "Orchestrator"},
+    {"key": "OPENAI_MODEL",      "label": "OpenAI Model",        "secret": False, "group": "Orchestrator"},
+    {"key": "ANTHROPIC_API_KEY", "label": "Anthropic API Key",   "secret": True,  "group": "Orchestrator"},
+    {"key": "ANTHROPIC_MODEL",   "label": "Anthropic Model",     "secret": False, "group": "Orchestrator"},
+    {"key": "GEMINI_MODEL",      "label": "Gemini Model",        "secret": False, "group": "Orchestrator"},
+    {"key": "OLLAMA_MODEL",      "label": "Ollama Model",        "secret": False, "group": "Orchestrator"},
+    {"key": "OLLAMA_BASE_URL",   "label": "Ollama Base URL",     "secret": False, "group": "Orchestrator"},
+    {"key": "DISCORD_BOT_TOKEN", "label": "Discord Bot Token",   "secret": True,  "group": "Discord"},
+]
+
+
+_SCHEMA_KEYS = {f["key"] for f in SETTINGS_SCHEMA}
+_SECRET_KEYS = {f["key"] for f in SETTINGS_SCHEMA if f["secret"]}
+
+
+@mcp.custom_route("/api/settings", methods=["GET"])
+async def get_settings(request: Request) -> Response:
+    """Return the settings schema with current values."""
+    fields = []
+    for field in SETTINGS_SCHEMA:
+        raw = os.environ.get(field["key"], "")
+        entry = {
+            "key": field["key"],
+            "label": field["label"],
+            "secret": field["secret"],
+            "group": field["group"],
+            "value": _mask(raw) if (field["secret"] and raw) else raw,
+            "is_set": bool(raw),
+        }
+        if "type" in field:
+            entry["type"] = field["type"]
+        if "options" in field:
+            entry["options"] = field["options"]
+        fields.append(entry)
+    return _json({"fields": fields, "config_path": str(_config_path())})
+
+
+@mcp.custom_route("/api/settings", methods=["POST"])
+async def save_settings(request: Request) -> Response:
+    """Update settings and optionally notify the orchestrator to reload."""
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"detail": "Invalid JSON body."}, 400)
+
+    updates: dict[str, str] = body.get("settings", {})
+    config = _read_persistent_config()
+
+    for key, value in updates.items():
+        if key not in _SCHEMA_KEYS:
+            continue
+        value = value.strip()
+        if key in _SECRET_KEYS and not value:
+            continue
+        if value:
+            config[key] = value
+            os.environ[key] = value
+        else:
+            config.pop(key, None)
+            os.environ.pop(key, None)
+
+    _write_persistent_config(config)
+    _get_gemini_client.cache_clear()
+
+    orchestrator_url = os.getenv("ORCHESTRATOR_URL", "http://127.0.0.1:8080")
+    reload_result = None
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(f"{orchestrator_url}/reload")
+            if resp.status_code == 200:
+                reload_result = resp.json()
+                logger.info(f"Orchestrator reloaded: {reload_result}")
+            else:
+                logger.warning(f"Orchestrator reload failed: {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Could not reload orchestrator: {e}")
+
+    return _json({"status": "ok", "orchestrator_reloaded": reload_result})
 
 
 def main() -> None:

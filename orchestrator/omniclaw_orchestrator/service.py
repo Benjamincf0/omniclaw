@@ -9,6 +9,7 @@ from .config import AppConfig
 from .contracts import ChatRequest, ChatResponse, ToolCallRecord
 from .llm import ModelClientRegistry, ResolvedChatClient
 from .mcp_client import MultiServerMcpClient
+from .tool_hints import build_orchestration_system_prompt
 
 
 class SessionStore:
@@ -69,15 +70,16 @@ class ChatService:
 
         history = self.sessions.get(session_id)
         user_message = self._build_user_message(request, message_text)
-        conversation: list[dict[str, Any]] = [
-            {"role": "system", "content": self.config.system_prompt},
-            *history,
-            user_message,
-        ]
+        conversation: list[dict[str, Any]] = []
         tool_call_records: list[ToolCallRecord] = []
 
         async with self.mcp_client_factory() as mcp_client:
             tools = await mcp_client.list_tools()
+            conversation = self._build_conversation(
+                history=history,
+                user_message=user_message,
+                tool_names=[tool.name for tool in tools],
+            )
 
             for _ in range(self.config.max_tool_rounds):
                 completion = await selected_client.client.complete(
@@ -113,7 +115,10 @@ class ChatService:
                 if not reply:
                     reply = "I couldn't produce a reply for that request."
 
-                self.sessions.set(session_id, conversation[1:])
+                self.sessions.set(
+                    session_id,
+                    [message for message in conversation if message.get("role") != "system"],
+                )
                 return ChatResponse(
                     session_id=session_id,
                     reply=reply,
@@ -141,6 +146,23 @@ class ChatService:
         else:
             content = message_text
         return {"role": "user", "content": content}
+
+    def _build_conversation(
+        self,
+        *,
+        history: list[dict[str, Any]],
+        user_message: dict[str, str],
+        tool_names: list[str],
+    ) -> list[dict[str, Any]]:
+        conversation: list[dict[str, Any]] = [
+            {"role": "system", "content": self.config.system_prompt},
+        ]
+        orchestration_prompt = build_orchestration_system_prompt(tool_names)
+        if orchestration_prompt:
+            conversation.append({"role": "system", "content": orchestration_prompt})
+        conversation.extend(history)
+        conversation.append(user_message)
+        return conversation
 
     async def _call_tool_safely(
         self,

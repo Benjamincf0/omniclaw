@@ -59,3 +59,72 @@ Helpful helper commands:
 ```
 
 Each folder still has its own `README.md` if you want to run a single service by itself.
+
+```
+ ┌─────────────────────────────────────────────────────────────────┐
+  │                         USER BROWSER                            │
+  │                      (frontend/src/)                            │
+  │                     React + Vite App                            │
+  └────────────────────────┬────────────────────────────────────────┘
+                           │ POST /chat
+                           │ { message, history }
+                           ▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                     ORCHESTRATOR :8080                          │
+  │              omniclaw_orchestrator/server.py                    │
+  │                      FastAPI + CORS                             │
+  │                                                                 │
+  │   load_config()  ←  MODEL_PROVIDER env var                      │
+  │        │                                                        │
+  │        ▼                                                        │
+  │   ModelClientRegistry                                           │
+  │        │                                                        │
+  │        ├── MODEL_PROVIDER=gemini  →  GeminiChatClient           │
+  │        ├── MODEL_PROVIDER=ollama  →  OpenAICompatibleClient     │
+  │        ├── MODEL_PROVIDER=openai  →  OpenAICompatibleClient     │
+  │        └── MODEL_PROVIDER=claude  →  AnthropicChatClient        │
+  │                                                                 │
+  │   MultiServerMcpClient  (fetches & calls MCP tools)            │
+  └──────────┬──────────────────────────┬───────────────────────────┘
+             │ MCP over HTTP            │ HTTPS API calls
+             │ streamable-http          │
+             ▼                          ▼
+  ┌─────────────────────┐   ┌──────────────────────────────────────┐
+  │   MCP SERVER :8000  │   │           LLM PROVIDERS              │
+  │   omni.py           │   │                                      │
+  │   FastMCP + FastAPI │   │  ┌─────────────────────────────┐     │
+  │                     │   │  │  Gemini API (cloud)          │     │
+  │  Tools exposed:     │   │  │  generativelanguage.google   │     │
+  │  • get_mio          │   │  │  GEMINI_API_KEY required     │     │
+  │  • get_mio_item     │   │  └─────────────────────────────┘     │
+  │  • send_mio         │   │                                      │
+  │  • get_news         │   │  ┌─────────────────────────────┐     │
+  │  • get_news_item    │   │  │  Ollama (local)              │     │
+  │                     │   │  │  localhost:11434             │     │
+  └──────────┬──────────┘   │  │  no API key needed           │     │
+             │              │  └─────────────────────────────┘     │
+             │ HTTPS        └──────────────────────────────────────┘
+             ▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │               OMNIVOX  (johnabbott.omnivox.ca)                  │
+  │                  Cookie-based auth session                       │
+  │              /mio  /news  endpoints (scraped HTML)              │
+  └─────────────────────────────────────────────────────────────────┘
+
+                           DISCORD BOT
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                    discord-bot/ :separate                        │
+  │              Connects to Discord Gateway API                     │
+  │              POST /chat  →  Orchestrator :8080                  │
+  └─────────────────────────────────────────────────────────────────┘
+
+  Request flow for a chat message:
+
+  1. Browser sends POST /chat to Orchestrator :8080
+  2. Orchestrator picks the LLM based on MODEL_PROVIDER
+  3. LLM responds — if it wants data, it returns a tool call
+  4. Orchestrator calls the MCP Server :8000 with the tool name + args
+  5. MCP Server scrapes Omnivox and returns the data
+  6. Orchestrator feeds the result back to the LLM
+  7. LLM produces a final reply → returned to the browser
+  ```
