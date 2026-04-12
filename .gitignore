@@ -1,1 +1,8 @@
 mcp-server/.env
+
+# Build artifacts
+mcp-server/static/
+mcp-server/build/
+mcp-server/dist/
+installer/Output/
+installer/OllamaSetup.exe

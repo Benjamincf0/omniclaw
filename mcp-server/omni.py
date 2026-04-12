@@ -1,6 +1,7 @@
 import asyncio
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastmcp import FastMCP
 
@@ -16,6 +17,8 @@ from google.genai import types
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import uvicorn
 from dotenv import load_dotenv
 
@@ -267,6 +270,13 @@ async def chat(body: ChatRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok", "model": "gemini-2.5-flash"}
+
+
+# ── Static frontend serving ──────────────────────────────────────────────────
+
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.is_dir():
+    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="static")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
