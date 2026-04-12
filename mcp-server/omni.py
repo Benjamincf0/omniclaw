@@ -202,25 +202,30 @@ async def get_news_item(
 
 @mcp.tool()
 async def get_calendar_events(
-    num: int = 10, include_past: bool = False
+    num: int = 10,
+    include_past: bool = False,
+    token: AccessToken = CurrentAccessToken(),
 ) -> AllCalendarEventsRes:
     """Get calendar events from the student's Omnivox homepage."""
     if num < 1:
         raise ValueError("num must be at least 1")
-
+    user_id = _get_user_id(token)
     events = await fetch_calendar_events(
-        AllCalendarEventsReq(include_past=include_past)
+        AllCalendarEventsReq(include_past=include_past), user_id=user_id
     )
     return AllCalendarEventsRes(events=events.events[:num])
 
 
 @mcp.tool()
-async def get_lea_classes(num: int = 10) -> AllLeaClassesRes:
+async def get_lea_classes(
+    num: int = 10,
+    token: AccessToken = CurrentAccessToken(),
+) -> AllLeaClassesRes:
     """Get the dashboard info for the student's LEA classes."""
     if num < 1:
         raise ValueError("num must be at least 1")
-
-    classes = await fetch_lea_classes(AllLeaClassesReq())
+    user_id = _get_user_id(token)
+    classes = await fetch_lea_classes(AllLeaClassesReq(), user_id=user_id)
     return AllLeaClassesRes(classes=classes.classes[:num])
 
 
@@ -247,16 +252,52 @@ async def get_account_status(
     return result
 
 
-# ── Gemini setup (for the /chat FastAPI endpoint used by the frontend) ────────
+# ── Gemini setup (for the /chat endpoint used by the frontend) ───────────────
 
-TOOL_HANDLERS: dict = {
-    "get_mio": get_mio,
-    "send_mio": send_mio,
-    "get_news": get_news,
-    "get_news_item": get_news_item,
-    "get_calendar_events": get_calendar_events,
-    "get_lea_classes": get_lea_classes,
-}
+def _make_chat_handlers(user_id: str) -> dict:
+    """
+    Build Gemini tool handlers bound to a specific Auth0 user's Omnivox session.
+    These call the model layer directly (bypassing FastMCP dependency injection)
+    so they work from the plain HTTP /chat endpoint.
+    """
+    async def _get_mio(num: int = 10) -> dict:
+        result = await _get_all_mios(AllMiosReq(), user_id=user_id)
+        return AllMiosRes(mios=result.mios[:num]).model_dump()
+
+    async def _send_mio(subject: str, message: str) -> str:
+        resp = await omnivox_request_for_user(
+            user_id,
+            "/intr/Module/MessagerieEleve/Envoyer.aspx",
+            method="POST",
+            data={"subject": subject, "message": message},
+        )
+        return resp.text
+
+    async def _get_news(num: int = 10) -> dict:
+        result = await _get_all_news(AllNewsReq(), user_id=user_id)
+        return AllNewsRes(news_links=result.news_links[:num]).model_dump()
+
+    async def _get_news_item(link: str) -> dict:
+        return (await _get_news_detail(NewsReq(link=link), user_id=user_id)).model_dump()
+
+    async def _get_calendar_events(num: int = 10, include_past: bool = False) -> dict:
+        result = await fetch_calendar_events(
+            AllCalendarEventsReq(include_past=include_past), user_id=user_id
+        )
+        return AllCalendarEventsRes(events=result.events[:num]).model_dump()
+
+    async def _get_lea_classes(num: int = 10) -> dict:
+        result = await fetch_lea_classes(AllLeaClassesReq(), user_id=user_id)
+        return AllLeaClassesRes(classes=result.classes[:num]).model_dump()
+
+    return {
+        "get_mio": _get_mio,
+        "send_mio": _send_mio,
+        "get_news": _get_news,
+        "get_news_item": _get_news_item,
+        "get_calendar_events": _get_calendar_events,
+        "get_lea_classes": _get_lea_classes,
+    }
 
 GEMINI_TOOLS = [
     types.Tool(
@@ -411,8 +452,9 @@ async def _generate(contents: list) -> types.GenerateContentResponse:
             raise
 
 
-async def run_chat(message: str, history: list[dict]) -> str:
+async def run_chat(message: str, history: list[dict], user_id: str) -> str:
     """Agentic Gemini loop: call model, execute tool calls, repeat until text."""
+    tool_handlers = _make_chat_handlers(user_id)
     contents = _build_contents(message, history)
 
     while True:
@@ -428,11 +470,9 @@ async def run_chat(message: str, history: list[dict]) -> str:
         tool_results: list[types.Part] = []
         for part in function_calls:
             fc = part.function_call
-            handler = TOOL_HANDLERS.get(fc.name)
+            handler = tool_handlers.get(fc.name)
             if handler:
                 result = await handler(**dict(fc.args))
-                if hasattr(result, "model_dump"):
-                    result = result.model_dump()
             else:
                 result = f"Unknown tool: {fc.name}"
 
@@ -653,6 +693,10 @@ async def unlink_omnivox(request: Request) -> Response:
 @mcp.custom_route("/chat", methods=["POST"])
 async def chat(request: Request) -> Response:
     """Proxy chat messages to Gemini with tool support (used by the React frontend)."""
+    user_id = await _require_user_id(request)
+    if not user_id:
+        return _json({"detail": "Missing or invalid Authorization header."}, 401)
+
     try:
         body = await request.json()
     except Exception:
@@ -665,7 +709,7 @@ async def chat(request: Request) -> Response:
         return _json({"detail": "Message cannot be empty."}, 400)
 
     try:
-        reply = await run_chat(message, history)
+        reply = await run_chat(message, history, user_id=user_id)
         return _json({"reply": reply})
     except Exception as e:
         msg = str(e)

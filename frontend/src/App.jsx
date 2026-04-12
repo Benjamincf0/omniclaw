@@ -11,18 +11,7 @@ import WelcomeScreen from "./components/WelcomeScreen"
 import AuthPage from "./components/AuthPage"
 import SetupPage from "./components/SetupPage"
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080"
-
-async function fetchReply(message, history) {
-  const res = await fetch(`${BACKEND_URL}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, history }),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.detail ?? `Server error ${res.status}`)
-  return data.reply
-}
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000"
 
 // ── Loading spinner (shared) ──────────────────────────────────────────────────
 
@@ -45,9 +34,9 @@ function LoadingDots() {
 // ── Chat page ─────────────────────────────────────────────────────────────────
 
 function ChatPage() {
+  const { getAccessTokenSilently } = useAuth0()
   const [messages, setMessages] = useState([])
   const [isTyping, setIsTyping] = useState(false)
-  const [showSettings, setShowSettings] = useState(false)
   const bottomRef = useRef(null)
   const hasMessages = messages.length > 0
 
@@ -67,8 +56,18 @@ function ChatPage() {
     }))
 
     try {
-      const reply = await fetchReply(text, history)
-      setMessages((prev) => [...prev, { role: "assistant", content: reply }])
+      const token = await getAccessTokenSilently()
+      const res = await fetch(`${BACKEND_URL}/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ message: text, history }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail ?? `Server error ${res.status}`)
+      setMessages((prev) => [...prev, { role: "assistant", content: data.reply }])
     } catch {
       setMessages((prev) => [
         ...prev,

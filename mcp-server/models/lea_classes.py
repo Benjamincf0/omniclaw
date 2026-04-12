@@ -14,7 +14,7 @@ _SERVER_ROOT = Path(__file__).resolve().parent.parent
 if str(_SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVER_ROOT))
 
-from omnivox_client import DEFAULT_USER_AGENT, omnivox_request_url  # noqa: E402
+from omnivox_client import DEFAULT_USER_AGENT, omnivox_request_url, omnivox_request_for_user  # noqa: E402
 from models.news import OMNIVOX_BASE, _normalize_text  # noqa: E402
 
 LEA_CLASSES_URL_ENV = "LEA_CLASSES_URL"
@@ -79,8 +79,11 @@ def _build_headers(url: str) -> dict[str, str]:
     }
 
 
-async def _fetch_response(url: str):
-    response = await omnivox_request_url(url, headers=_build_headers(url))
+async def _fetch_response(url: str, user_id: str | None = None):
+    if user_id:
+        response = await omnivox_request_for_user(user_id, url.replace(OMNIVOX_BASE, ""))
+    else:
+        response = await omnivox_request_url(url, headers=_build_headers(url))
     response.raise_for_status()
     return response
 
@@ -268,9 +271,9 @@ def _extract_lea_classes(html: str, base_url: str) -> list[LeaClass]:
     return classes
 
 
-async def get_lea_classes(req: AllLeaClassesReq) -> AllLeaClassesRes:
+async def get_lea_classes(req: AllLeaClassesReq, user_id: str | None = None) -> AllLeaClassesRes:
     del req
     list_url = _load_list_url()
-    response = await _fetch_response(list_url)
+    response = await _fetch_response(list_url, user_id=user_id)
     final_url = str(response.url)
     return AllLeaClassesRes(classes=_extract_lea_classes(response.text, final_url))
