@@ -16,13 +16,12 @@ from typing import Any
 import httpx
 from auth_manager import (
     authenticate,
-    authenticate_for_user,
     clear_auth_state,
     load_auth,
     load_auth_cookies,
     save_auth_cookies,
 )
-from user_store import get_omnivox_cookies, save_omnivox_cookies
+from user_store import get_omnivox_cookies
 
 OMNIVOX_BASE = "https://johnabbott.omnivox.ca"
 DEFAULT_USER_AGENT = (
@@ -96,6 +95,13 @@ def _is_auth_failure(response: httpx.Response) -> bool:
         return True
     if _is_login_url(str(response.url)):
         return True
+    # When follow_redirects=False a login redirect comes back as a bare 3xx
+    # response — response.history is empty so we must check the Location header
+    # directly.
+    if response.is_redirect:
+        location = response.headers.get("location", "")
+        if location and _is_login_url(location):
+            return True
     for hop in response.history:
         location = hop.headers.get("location", "")
         if location and _is_login_url(location):
@@ -208,10 +214,9 @@ async def omnivox_request_for_user(
     """
     Make an authenticated Omnivox request on behalf of *user_id*.
 
-    Looks up that user's cookies from user_store.  If none are stored, raises
-    PermissionError telling the caller to link the account first.
-
-    On auth failure, triggers a new browser login for that user and retries once.
+    Looks up that user's cookies from user_store.  If none are stored, or if
+    the stored session has expired, raises PermissionError — the caller should
+    ask the student to re-run the /setup flow to refresh their cookies.
     """
     url = f"{OMNIVOX_BASE}{path}"
     cookies_str = await get_omnivox_cookies(user_id)
@@ -219,7 +224,7 @@ async def omnivox_request_for_user(
     if not cookies_str:
         raise PermissionError(
             f"No Omnivox session found for user '{user_id}'. "
-            "Please visit /link-omnivox to connect your Omnivox account."
+            "Please visit the setup page to connect your Omnivox account."
         )
 
     headers = kwargs.pop("headers", {})
@@ -227,19 +232,13 @@ async def omnivox_request_for_user(
 
     async with httpx.AsyncClient() as client:
         resp = await client.request(
-            method, url, headers=headers, follow_redirects=False, **kwargs
+            method, url, headers=headers, follow_redirects=True, **kwargs
         )
 
-        if _is_auth_failure(resp):
-            new_cookies = await authenticate_for_user(user_id, target_url=url)
-            if not new_cookies:
-                raise PermissionError(
-                    f"Re-authentication failed for user '{user_id}'. "
-                    "Please visit /link-omnivox to reconnect your Omnivox account."
-                )
-            headers["Cookie"] = new_cookies
-            resp = await client.request(
-                method, url, headers=headers, follow_redirects=False, **kwargs
-            )
+    if _is_auth_failure(resp):
+        raise PermissionError(
+            f"Omnivox session expired for user '{user_id}'. "
+            "Please re-authenticate by visiting the setup page."
+        )
 
     return resp

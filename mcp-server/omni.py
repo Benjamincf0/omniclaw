@@ -558,6 +558,18 @@ async def _await_otp(session: dict) -> str:
     return session["otp"]
 
 
+# Module URLs that need to be visited after login so Omnivox issues
+# their sub-session tokens.  These are captured in the browser's cookie
+# jar and stored alongside the base session cookies.
+_OMNIVOX_WARM_URLS: list[str] = [
+    os.getenv(
+        "MIO_LIST_URL",
+        "https://johnabbott.omnivox.ca/WebApplication/Module.MIOE/Commun/Message"
+        "/MioListe.aspx?NomCategorie=SEARCH_FOLDER_MioRecu&C=JAC&E=P&L=ANG",
+    ),
+]
+
+
 async def _run_login(session: dict, email: str, password: str, user_id: str) -> None:
     """Background task: run authenticate_headless and update session on completion."""
     try:
@@ -566,6 +578,7 @@ async def _run_login(session: dict, email: str, password: str, user_id: str) -> 
             password,
             user_id,
             otp_callback=lambda: _await_otp(session),
+            warm_urls=_OMNIVOX_WARM_URLS,
         )
         session["status"] = "success"
     except Exception as exc:

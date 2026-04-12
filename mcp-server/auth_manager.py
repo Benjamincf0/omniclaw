@@ -388,6 +388,7 @@ async def authenticate_headless(
     password: str,
     user_id: str,
     otp_callback: Callable[[], Awaitable[str]] | None = None,
+    warm_urls: list[str] | None = None,
 ) -> str:
     """
     Log in to Omnivox programmatically using *email* and *password*.
@@ -498,6 +499,15 @@ async def authenticate_headless(
                     raise RuntimeError(
                         "Omnivox login failed — check your student ID and password."
                     )
+
+            # Navigate to each warm URL so module-specific session tokens are
+            # issued and captured in the browser context's cookie jar.
+            for warm_url in (warm_urls or []):
+                try:
+                    await page.goto(warm_url, wait_until="domcontentloaded", timeout=10000)
+                    await asyncio.sleep(1)
+                except Exception as exc:
+                    print(f"[auth] Warning: could not warm {warm_url}: {exc}")
 
             # Give a moment for post-login requests to fire so we capture cookies.
             await asyncio.sleep(2)
