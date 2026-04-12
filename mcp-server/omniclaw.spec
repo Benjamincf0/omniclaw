@@ -6,12 +6,15 @@ Bundles the MCP server, orchestrator, and Discord bot into a single
 executable that mirrors ``./omniclaw up``.
 
 Build with:  pyinstaller omniclaw.spec
-Output:      dist/omniclaw/omniclaw.exe
+Output:      dist/omniclaw/omniclaw(.exe on Windows)
 """
 
 import os
 import sys
 from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+# UPX breaks or complicates many macOS bundles and Gatekeeper workflows.
+_USE_UPX = sys.platform != "darwin"
 
 
 def _collect(pkg):
@@ -70,23 +73,30 @@ for _pkg in _packages:
     _all_bins   += _b
     _all_imports += _h
 
+try:
+    _spec_root = os.path.dirname(os.path.abspath(SPECPATH))
+except NameError:
+    _spec_root = os.getcwd()
+_optional_secrets = []
+for _fn in ("auth.txt", ".env"):
+    if os.path.isfile(os.path.join(_spec_root, _fn)):
+        _optional_secrets.append((_fn, "."))
+
 a = Analysis(
     ["launcher.py"],
     pathex=[
-        os.path.abspath(os.path.join("..", "orchestrator", "src")),
+        os.path.abspath(os.path.join("..", "orchestrator")),
         os.path.abspath(os.path.join("..", "discord-bot", "src")),
     ],
     binaries=_all_bins,
     datas=[
         ("static", "static"),
         ("models", "models"),
-        ("auth.txt", "."),
-        (".env", "."),
-        (os.path.join("..", "orchestrator", "src", "omniclaw_orchestrator"),
+        (os.path.join("..", "orchestrator", "omniclaw_orchestrator"),
          "omniclaw_orchestrator"),
         (os.path.join("..", "discord-bot", "src", "omniclaw_discord_bot"),
          "omniclaw_discord_bot"),
-    ] + _all_datas + _playwright_driver_datas(),
+    ] + _optional_secrets + _all_datas + _playwright_driver_datas(),
     hiddenimports=[
         # local app modules (not auto-discoverable by static analysis)
         "omni",
@@ -142,7 +152,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=_USE_UPX,
     console=True,
     icon=None,
 )
@@ -152,7 +162,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=_USE_UPX,
     upx_exclude=[],
     name="omniclaw",
 )

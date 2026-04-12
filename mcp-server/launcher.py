@@ -108,6 +108,15 @@ def _find_ollama() -> str | None:
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
         os.path.expandvars(r"%PROGRAMFILES%\Ollama\ollama.exe"),
     ]
+    if sys.platform == "darwin":
+        common_paths.extend(
+            [
+                "/Applications/Ollama.app/Contents/Resources/ollama",
+                os.path.expanduser(
+                    "~/Applications/Ollama.app/Contents/Resources/ollama"
+                ),
+            ]
+        )
     for p in common_paths:
         if os.path.isfile(p):
             return p

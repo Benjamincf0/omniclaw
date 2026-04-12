@@ -6,6 +6,10 @@ mcp-server/build/
 mcp-server/dist/
 installer/Output/
 installer/OllamaSetup.exe
+installer/macos/Output/
+installer/macos/Ollama.dmg
+installer/macos/.pkgroot/
+installer/macos/.staging/
 
 # Python-generated files
 __pycache__/
