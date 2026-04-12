@@ -22,4 +22,5 @@ wheels/
 auth.txt
 
 .env*
+*.env
 !.env.example
