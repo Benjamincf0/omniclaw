@@ -74,6 +74,9 @@ def _set_defaults() -> None:
     os.environ.setdefault("MCP_TRANSPORT_PATH", "/mcp")
     os.environ.setdefault("ORCHESTRATOR_HOST", ORCHESTRATOR_HOST)
     os.environ.setdefault("ORCHESTRATOR_PORT", str(ORCHESTRATOR_PORT))
+    os.environ.setdefault("OMNICLAW_ENV_FILE", str(_user_config_path()))
+    if getattr(sys, "frozen", False):
+        os.environ.setdefault("OMNICLAW_START_WITHOUT_API_KEYS", "1")
 
     if not os.environ.get("ORCHESTRATOR_URL", "").strip():
         port = os.environ["ORCHESTRATOR_PORT"]
@@ -165,10 +168,9 @@ def _run_orchestrator() -> None:
     try:
         import uvicorn
         from omniclaw_orchestrator.server import app as orch_app
-        from omniclaw_orchestrator.config import load_config
 
-        config = load_config()
-        uvicorn.run(orch_app, host=config.host, port=config.port, reload=False)
+        cfg = orch_app.state.config
+        uvicorn.run(orch_app, host=cfg.host, port=cfg.port, reload=False)
     except ValueError as exc:
         print(f"[launcher] Orchestrator skipped (config incomplete): {exc}")
     except Exception as exc:

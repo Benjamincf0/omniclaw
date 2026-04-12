@@ -176,16 +176,20 @@ def _load_provider_config(provider: str) -> ModelProviderConfig:
     raise ValueError(f"Unsupported model provider: {provider}")
 
 
+def _model_env_var(provider: str) -> str:
+    return {
+        "openai": "OPENAI_MODEL",
+        "ollama": "OLLAMA_MODEL",
+        "claude": "ANTHROPIC_MODEL",
+        "gemini": "GEMINI_MODEL",
+    }[provider]
+
+
 def _validate_default_provider(
     default_provider: str, provider_config: ModelProviderConfig
 ) -> None:
     if not provider_config.default_model:
-        env_name = {
-            "openai": "OPENAI_MODEL",
-            "ollama": "OLLAMA_MODEL",
-            "claude": "ANTHROPIC_MODEL",
-            "gemini": "GEMINI_MODEL",
-        }[default_provider]
+        env_name = _model_env_var(default_provider)
         raise ValueError(
             f"{env_name} is required when MODEL_PROVIDER={default_provider}"
         )
@@ -198,13 +202,78 @@ def _validate_default_provider(
         raise ValueError("GEMINI_API_KEY is required when MODEL_PROVIDER=gemini")
 
 
-def load_config() -> AppConfig:
+def describe_credentials_gap(
+    *,
+    default_provider: str,
+    model_providers: dict[str, ModelProviderConfig],
+    request_provider: str | None,
+    request_model: str | None,
+) -> dict[str, str] | None:
+    """If chat cannot run yet for the resolved provider/model, return a JSON-safe detail dict."""
+    provider = normalize_model_provider(request_provider or default_provider)
+    cfg = model_providers[provider]
+    resolved_model = (request_model or "").strip() or cfg.default_model.strip()
+    if not resolved_model:
+        env_var = _model_env_var(provider)
+        return {
+            "code": "NEEDS_MODEL",
+            "env_var": env_var,
+            "message": (
+                f"Configure {env_var} in Settings (gear icon), save, then try again."
+            ),
+            "provider": provider,
+        }
+    if provider == "openai" and not cfg.api_key.strip():
+        return {
+            "code": "NEEDS_API_KEY",
+            "env_var": "OPENAI_API_KEY",
+            "message": (
+                "Add your OpenAI API key in Settings (gear icon), save, then try again."
+            ),
+            "provider": provider,
+        }
+    if provider == "claude" and not cfg.api_key.strip():
+        return {
+            "code": "NEEDS_API_KEY",
+            "env_var": "ANTHROPIC_API_KEY",
+            "message": (
+                "Add your Anthropic API key in Settings, save, then try again."
+            ),
+            "provider": provider,
+        }
+    if provider == "gemini" and not cfg.api_key.strip():
+        return {
+            "code": "NEEDS_API_KEY",
+            "env_var": "GEMINI_API_KEY",
+            "message": (
+                "Add your Gemini API key in Settings, save, then try again."
+            ),
+            "provider": provider,
+        }
+    return None
+
+
+def default_provider_chat_ready(
+    default_provider: str, model_providers: dict[str, ModelProviderConfig]
+) -> tuple[bool, dict[str, str] | None]:
+    """Whether the configured default provider can accept a chat request as-is."""
+    gap = describe_credentials_gap(
+        default_provider=default_provider,
+        model_providers=model_providers,
+        request_provider=None,
+        request_model=None,
+    )
+    return (gap is None, gap)
+
+
+def load_config(*, allow_missing_credentials: bool = False) -> AppConfig:
     default_provider = normalize_model_provider(os.getenv("MODEL_PROVIDER", "openai"))
     model_providers = {
         provider: _load_provider_config(provider)
         for provider in SUPPORTED_MODEL_PROVIDERS
     }
-    _validate_default_provider(default_provider, model_providers[default_provider])
+    if not allow_missing_credentials:
+        _validate_default_provider(default_provider, model_providers[default_provider])
 
     return AppConfig(
         host=os.getenv("ORCHESTRATOR_HOST", "127.0.0.1").strip(),

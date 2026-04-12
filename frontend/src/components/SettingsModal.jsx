@@ -2,8 +2,8 @@ import { useState, useEffect } from "react"
 import { X, Eye, EyeOff, Save, Loader2, CheckCircle, AlertCircle, RefreshCw } from "lucide-react"
 
 // Settings API is on the MCP server (port 8000), not the orchestrator (8080)
-const MCP_SERVER_URL = import.meta.env.VITE_MCP_SERVER_URL ?? "http://localhost:8000"
-const ORCHESTRATOR_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080"
+const MCP_SERVER_URL = import.meta.env.VITE_MCP_SERVER_URL ?? "http://127.0.0.1:8000"
+const ORCHESTRATOR_URL = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8080"
 const SETTINGS_URL = import.meta.env.VITE_SETTINGS_URL ?? ""
 
 export default function SettingsModal({ onClose }) {

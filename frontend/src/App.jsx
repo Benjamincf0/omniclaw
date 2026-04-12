@@ -11,7 +11,7 @@ import GlancePanel from "./components/GlancePanel"
 import ConsentScreen from "./components/ConsentScreen"
 import SettingsModal from "./components/SettingsModal"
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080"
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8080"
 
 async function fetchReply(message, history) {
   const res = await fetch(`${BACKEND_URL}/chat`, {
@@ -19,8 +19,30 @@ async function fetchReply(message, history) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, history }),
   })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.detail ?? `Server error ${res.status}`)
+  let data
+  try {
+    data = await res.json()
+  } catch {
+    throw new Error("The server returned an invalid response.")
+  }
+  if (!res.ok) {
+    const d = data?.detail
+    if (
+      typeof d === "object" &&
+      d != null &&
+      (d.code === "NEEDS_API_KEY" || d.code === "NEEDS_MODEL")
+    ) {
+      const err = new Error(
+        d.message || "Open Settings (gear icon) to add your API key or model, then save."
+      )
+      err.setupHint = true
+      err.code = d.code
+      throw err
+    }
+    const detail =
+      typeof d === "string" ? d : (d && typeof d.message === "string" ? d.message : null)
+    throw new Error(detail ?? `Server error ${res.status}`)
+  }
   return data.reply
 }
 
@@ -72,10 +94,24 @@ export default function App() {
       const reply = await fetchReply(text, history)
       setMessages((prev) => [...prev, { role: "assistant", content: reply, timestamp: Date.now() }])
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "Something went wrong. Is the server running?", timestamp: Date.now() },
-      ])
+      if (err.setupHint) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: err.message, timestamp: Date.now() },
+        ])
+        setShowSettings(true)
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content:
+              err.message?.trim() ||
+              "Something went wrong. Is the server running?",
+            timestamp: Date.now(),
+          },
+        ])
+      }
     } finally {
       setIsTyping(false)
     }
