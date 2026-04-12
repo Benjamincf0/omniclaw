@@ -108,7 +108,7 @@ export default function App() {
 
           {page === "chat" && (
             <>
-              <Header />
+              <Header onSettingsClick={() => setShowSettings(true)} />
               <div
                 className="flex-1 overflow-y-auto py-4 bg-textured-warm"
               >
@@ -137,27 +137,10 @@ export default function App() {
           <GlancePanel />
         </div>
 
-//     <div className="flex flex-col h-screen max-w-2xl mx-auto">
-//       <Header onSettingsClick={() => setShowSettings(true)} />
-//       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-
-//       {/* Message area */}
-//       <div className="flex-1 overflow-y-auto py-4">
-//         {!hasMessages && (
-//           <div className="flex flex-col gap-6">
-//             <WelcomeScreen />
-//             <QuickChips onSelect={handleSend} />
-//           </div>
-//         )}
-
-//         {messages.map((msg, i) => (
-//           <Message key={i} role={msg.role} content={msg.content} />
-//         ))}
-        
-//         {isTyping && <TypingIndicator />}
-
-//         <div ref={bottomRef} />
       </div>
+
+      {/* Settings modal */}
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
 
       {/* Consent modal - shown when user hasn't accepted or on-demand from sidebar */}
       {showConsent && <ConsentScreen onAccept={handleAcceptConsent} />}
