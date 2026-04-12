@@ -141,10 +141,12 @@ def _headers_with_token(config: NewsConfig, token: str) -> dict[str, str]:
 
 
 async def _fetch_html(url: str, config: NewsConfig) -> str:
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"Invalid URL (missing protocol): {url!r}")
     token = await _ensure_news_token(target_url=url)
 
     async with httpx.AsyncClient(
-        timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False
+        timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False, verify=False
     ) as client:
         response = await client.get(url, headers=_headers_with_token(config, token))
         if _is_auth_redirect(response):
