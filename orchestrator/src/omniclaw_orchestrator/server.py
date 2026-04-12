@@ -18,6 +18,9 @@ def create_app() -> FastAPI:
         return HealthResponse(
             status="ok",
             mcp_servers=[server.name for server in config.mcp_servers],
+            default_provider=service.default_provider,
+            default_model=service.default_model,
+            available_providers=service.available_providers(),
         )
 
     @app.post("/chat", response_model=ChatResponse)

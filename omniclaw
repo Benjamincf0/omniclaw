@@ -15,6 +15,17 @@ from typing import TextIO
 
 ROOT = Path(__file__).resolve().parent
 
+MODEL_PROVIDER_ALIASES = {
+    "openai": "openai",
+    "ollama": "ollama",
+    "olama": "ollama",
+    "claude": "claude",
+    "anthropic": "claude",
+    "cloud": "claude",
+    "gemini": "gemini",
+    "google": "gemini",
+}
+
 
 @dataclass(frozen=True)
 class Service:
@@ -89,10 +100,25 @@ def build_runtime_env() -> dict[str, str]:
 
 
 def validate_env(env: dict[str, str]) -> list[str]:
-    missing: list[str] = []
-    for name in ("OPENAI_API_KEY", "OPENAI_MODEL", "DISCORD_BOT_TOKEN"):
-        if not env.get(name, "").strip():
-            missing.append(name)
+    raw_provider = env.get("MODEL_PROVIDER", "openai").strip().lower() or "openai"
+    provider = MODEL_PROVIDER_ALIASES.get(raw_provider)
+    if provider is None:
+        missing = ["MODEL_PROVIDER"]
+        if not env.get("DISCORD_BOT_TOKEN", "").strip():
+            missing.append("DISCORD_BOT_TOKEN")
+        return missing
+    required_by_provider = {
+        "openai": ("OPENAI_API_KEY", "OPENAI_MODEL"),
+        "ollama": ("OLLAMA_MODEL",),
+        "claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"),
+        "gemini": ("GEMINI_API_KEY", "GEMINI_MODEL"),
+    }
+
+    missing = [
+        name
+        for name in (*required_by_provider[provider], "DISCORD_BOT_TOKEN")
+        if not env.get(name, "").strip()
+    ]
     return missing
 
 

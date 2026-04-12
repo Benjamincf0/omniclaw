@@ -29,6 +29,20 @@ class ExposedTool:
             },
         }
 
+    def as_anthropic_tool(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": self.input_schema,
+        }
+
+    def as_gemini_function_declaration(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.input_schema,
+        }
+
 
 @dataclass(slots=True)
 class _ServerConnection:
@@ -120,9 +134,6 @@ class MultiServerMcpClient:
                 )
 
         return list(self._tools_by_name.values())
-
-    async def get_openai_tools(self) -> list[dict[str, Any]]:
-        return [tool.as_openai_tool() for tool in await self.list_tools()]
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         if not self._tools_by_name:

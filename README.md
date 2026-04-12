@@ -36,8 +36,12 @@ That command will:
 
 Required environment variables for the combined stack:
 
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL`
+- `MODEL_PROVIDER`
+- Provider-specific default model credentials:
+  - `OPENAI_API_KEY` + `OPENAI_MODEL` for `MODEL_PROVIDER=openai`
+  - `OLLAMA_MODEL` for `MODEL_PROVIDER=ollama`
+  - `ANTHROPIC_API_KEY` + `ANTHROPIC_MODEL` for `MODEL_PROVIDER=claude`
+  - `GEMINI_API_KEY` + `GEMINI_MODEL` for `MODEL_PROVIDER=gemini`
 - `DISCORD_BOT_TOKEN`
 
 Helpful helper commands:

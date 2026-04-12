@@ -26,6 +26,8 @@ class OrchestratorClient:
         user_id: str,
         user_name: str,
         message: str,
+        provider: str | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
         response = await self._client.post(
             "/chat",
@@ -34,6 +36,8 @@ class OrchestratorClient:
                 "user_id": user_id,
                 "user_name": user_name,
                 "message": message,
+                "provider": provider,
+                "model": model,
             },
         )
         return self._decode_json_dict(response)
