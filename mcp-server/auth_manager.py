@@ -1,12 +1,14 @@
 import asyncio
 import json
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from config_paths import user_data_dir
+from config_paths import playwright_browsers_dir, user_data_dir
 
 OMNIVOX_URL = "https://johnabbott.omnivox.ca"
 
@@ -26,14 +28,26 @@ def _ensure_browsers_installed() -> None:
     try:
         from playwright._impl._driver import compute_driver_executable
         driver_exe, driver_cli = compute_driver_executable()
+        env = os.environ.copy()
+        if getattr(sys, "frozen", False):
+            try:
+                pb = playwright_browsers_dir()
+                pb.mkdir(parents=True, exist_ok=True)
+                env.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(pb))
+            except OSError:
+                pass
         result = subprocess.run(
             [str(driver_exe), str(driver_cli), "install", "chromium"],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=env,
         )
         if result.returncode == 0:
             print("[auth] Playwright Chromium browser is ready.")
         else:
-            print(f"[auth] Playwright browser install warning: {result.stderr.strip()}")
+            err = (result.stderr or result.stdout or "").strip()
+            print(f"[auth] Playwright browser install warning: {err}")
     except Exception as exc:
         print(f"[auth] Could not auto-install Playwright browsers: {exc}")
         print("[auth] Run 'playwright install chromium' manually if login fails.")

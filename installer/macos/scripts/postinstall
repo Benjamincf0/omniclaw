@@ -34,13 +34,28 @@ if [[ ! -d "/Applications/Ollama.app" ]]; then
 fi
 
 # PyInstaller BUNDLE splits the onedir layout across MacOS/Frameworks/Resources with symlinks.
+# Install Chromium into Application Support (same PLAYWRIGHT_BROWSERS_PATH the frozen app sets).
 NODE="$(find "$APP/Contents" -path '*/playwright/driver/node' 2>/dev/null | head -1)"
 CLI="$(find "$APP/Contents" -path '*/playwright/driver/package/cli.js' 2>/dev/null | head -1)"
 if [[ -n "$NODE" && -x "$NODE" && -f "$CLI" ]]; then
 	if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" && "$CONSOLE_USER" != "loginwindow" ]]; then
 		UHOME="$(eval echo "~${CONSOLE_USER}" 2>/dev/null || true)"
 		if [[ -n "$UHOME" && -d "$UHOME" ]]; then
-			sudo -u "$CONSOLE_USER" env HOME="$UHOME" "$NODE" "$CLI" install chromium 2>/dev/null || true
+			PW_DIR="${UHOME}/Library/Application Support/Omniclaw/ms-playwright"
+			LOG="${UHOME}/Library/Application Support/Omniclaw/playwright-install.log"
+			# Run as the console user so ~/Library paths and the log file are user-owned.
+			sudo -u "$CONSOLE_USER" env \
+				HOME="$UHOME" \
+				INS_NODE="$NODE" \
+				INS_CLI="$CLI" \
+				INS_PW="$PW_DIR" \
+				INS_LOG="$LOG" \
+				bash -c '
+				set +e
+				mkdir -p "$INS_PW" "$(dirname "$INS_LOG")"
+				export PLAYWRIGHT_BROWSERS_PATH="$INS_PW"
+				"$INS_NODE" "$INS_CLI" install chromium >>"$INS_LOG" 2>&1
+				' || true
 		fi
 	fi
 fi

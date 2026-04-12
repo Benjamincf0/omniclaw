@@ -18,7 +18,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from config_paths import user_config_file
+from config_paths import playwright_browsers_dir, user_config_file
 
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 8000
@@ -80,6 +80,14 @@ def _set_defaults() -> None:
     os.environ.setdefault("OMNICLAW_ENV_FILE", str(_user_config_path()))
     if getattr(sys, "frozen", False):
         os.environ.setdefault("OMNICLAW_START_WITHOUT_API_KEYS", "1")
+        # Playwright defaults to ~/Library/Caches; use Application Support so
+        # postinstall and first-run auth share the same Chromium install.
+        try:
+            pb = playwright_browsers_dir()
+            pb.mkdir(parents=True, exist_ok=True)
+            os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(pb))
+        except OSError:
+            pass
 
     if not os.environ.get("ORCHESTRATOR_URL", "").strip():
         port = os.environ["ORCHESTRATOR_PORT"]

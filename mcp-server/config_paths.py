@@ -19,6 +19,14 @@ def _frozen_user_data_root() -> Path:
     return Path(xdg) / "omniclaw" if xdg else Path.home() / ".config" / "omniclaw"
 
 
+def playwright_browsers_dir() -> Path:
+    """
+    Playwright browser downloads (Chromium). Same path is used by the macOS
+    postinstall script so the installer and the frozen app agree.
+    """
+    return user_data_dir() / "ms-playwright"
+
+
 def user_data_dir() -> Path:
     """
     Writable directory for auth files, Playwright profile, omniclaw.env (frozen), etc.
