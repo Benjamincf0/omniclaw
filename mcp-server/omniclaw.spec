@@ -6,7 +6,7 @@ Bundles the MCP server, orchestrator, and Discord bot into a single
 executable that mirrors ``./omniclaw up``.
 
 Build with:  pyinstaller omniclaw.spec
-Output:      dist/omniclaw/omniclaw(.exe on Windows)
+Output:      Windows: dist/omniclaw/omniclaw.exe | macOS: dist/Omniclaw.app
 """
 
 import os
@@ -15,6 +15,9 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 # UPX breaks or complicates many macOS bundles and Gatekeeper workflows.
 _USE_UPX = sys.platform != "darwin"
+# macOS does not attach a Terminal when you double-click a .app; console=True
+# looks like "nothing happens". Use a GUI subprocess on Darwin; keep a console on Windows.
+_CONSOLE = sys.platform != "darwin"
 
 
 def _collect(pkg):
@@ -153,7 +156,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=_USE_UPX,
-    console=True,
+    console=_CONSOLE,
     icon=None,
 )
 
@@ -166,3 +169,23 @@ coll = COLLECT(
     upx_exclude=[],
     name="omniclaw",
 )
+
+# A real macOS .app must use PyInstaller's BUNDLE so libpython and dylibs land in
+# Contents/Frameworks. Copying the onedir tree into Contents/MacOS/ breaks the
+# bootloader (it looks for ../Frameworks/libpython*.dylib).
+if sys.platform == "darwin":
+    from PyInstaller.building.osx import BUNDLE
+
+    app = BUNDLE(
+        coll,
+        name="Omniclaw.app",
+        icon=None,
+        bundle_identifier="com.omniclaw.app",
+        version="0.1.0",
+        info_plist={
+            "CFBundleName": "Omniclaw",
+            "CFBundleDisplayName": "Omniclaw",
+            "CFBundleVersion": "0.1.0",
+            "LSMinimumSystemVersion": "12.0",
+        },
+    )

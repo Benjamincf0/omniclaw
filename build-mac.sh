@@ -114,12 +114,13 @@ step "Installing Python dependencies for PyInstaller"
 step "Bundling with PyInstaller (MCP + orchestrator + Discord bot)"
 ( cd "$SERVER" && "$PYTHON" -m PyInstaller omniclaw.spec --noconfirm --clean )
 
-DIST_OMNICLAW="${SERVER}/dist/omniclaw"
-[[ -d "$DIST_OMNICLAW" ]] || {
-	echo "PyInstaller output not found at $DIST_OMNICLAW" >&2
+DIST_APP="${SERVER}/dist/Omniclaw.app"
+[[ -d "$DIST_APP" ]] || {
+	echo "PyInstaller BUNDLE output not found at $DIST_APP" >&2
+	echo "(The macOS spec must emit Omniclaw.app via BUNDLE — see omniclaw.spec.)" >&2
 	exit 1
 }
-echo "PyInstaller bundle ready at $DIST_OMNICLAW"
+echo "PyInstaller app bundle ready at $DIST_APP"
 
 if [[ "$SKIP_OLLAMA" -eq 0 ]]; then
 	step "Downloading Ollama disk image (macOS)"
@@ -133,20 +134,14 @@ else
 	echo "Skipping Ollama download (--skip-ollama-download)" >&2
 fi
 
-step "Assembling Omniclaw.app"
-APP_NAME="Omniclaw.app"
-APP_DIR="${BUILD_STAGING}/${APP_NAME}"
+step "Staging Omniclaw.app for the installer"
 rm -rf "$BUILD_STAGING" "$PKG_ROOT"
-mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
-cp -R "${DIST_OMNICLAW}/" "${APP_DIR}/Contents/MacOS/"
-cp "${MAC_INSTALLER}/Info.plist" "${APP_DIR}/Contents/"
-chmod +x "${APP_DIR}/Contents/MacOS/omniclaw"
+mkdir -p "$PKG_ROOT" "$BUILD_STAGING"
+cp -R "$DIST_APP" "$PKG_ROOT/"
 if [[ -f "$OLLAMA_DMG" ]]; then
-	cp "$OLLAMA_DMG" "${APP_DIR}/Contents/Resources/"
+	mkdir -p "$PKG_ROOT/Omniclaw.app/Contents/Resources"
+	cp "$OLLAMA_DMG" "$PKG_ROOT/Omniclaw.app/Contents/Resources/"
 fi
-
-mkdir -p "$PKG_ROOT"
-cp -R "$APP_DIR" "$PKG_ROOT/"
 
 mkdir -p "$OUTPUT_DIR"
 COMPONENT_PKG="${BUILD_STAGING}/Omniclaw-component.pkg"
