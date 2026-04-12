@@ -254,9 +254,9 @@ def _extract_calendar_events(html: str, config: CalendarConfig) -> list[Calendar
     return events
 
 
-async def get_calendar_events(req: AllCalendarEventsReq) -> AllCalendarEventsRes:
+async def get_calendar_events(req: AllCalendarEventsReq, user_id: str | None = None) -> AllCalendarEventsRes:
     config = _load_config()
-    html = await _fetch_html(config.list_url, config)
+    html = await _fetch_html(config.list_url, config, user_id=user_id)
     events = _extract_calendar_events(html, config)
     if not req.include_past:
         events = [event for event in events if event.state.lower() != "passee"]

@@ -1,10 +1,15 @@
 """
 Authenticated HTTP client for Omnivox.
 
-Handles cookie-based auth with automatic re-authentication via browser popup
-when the session expires or is missing, while preserving module cookies that
-Omnivox sets during redirects and module bootstrap.
+Two modes:
+  - Single-user: uses cookie jar from auth.txt / auth_state.json via authenticate().
+  - Multi-tenant: takes an explicit user_id and reads cookies from user_store.
+
+Both modes automatically detect auth failures and trigger re-login via a
+headless browser popup, then retry the request once.
 """
+
+from __future__ import annotations
 
 from typing import Any
 
@@ -16,6 +21,7 @@ from auth_manager import (
     load_auth_cookies,
     save_auth_cookies,
 )
+from user_store import get_omnivox_cookies
 
 OMNIVOX_BASE = "https://johnabbott.omnivox.ca"
 DEFAULT_USER_AGENT = (
@@ -89,6 +95,13 @@ def _is_auth_failure(response: httpx.Response) -> bool:
         return True
     if _is_login_url(str(response.url)):
         return True
+    # When follow_redirects=False a login redirect comes back as a bare 3xx
+    # response — response.history is empty so we must check the Location header
+    # directly.
+    if response.is_redirect:
+        location = response.headers.get("location", "")
+        if location and _is_login_url(location):
+            return True
     for hop in response.history:
         location = hop.headers.get("location", "")
         if location and _is_login_url(location):
@@ -187,3 +200,45 @@ async def omnivox_request(
     **kwargs,
 ) -> httpx.Response:
     return await omnivox_request_url(path, method=method, **kwargs)
+
+
+# ── Multi-tenant per-user request ─────────────────────────────────────────────
+
+
+async def omnivox_request_for_user(
+    user_id: str,
+    path: str,
+    method: str = "GET",
+    **kwargs,
+) -> httpx.Response:
+    """
+    Make an authenticated Omnivox request on behalf of *user_id*.
+
+    Looks up that user's cookies from user_store.  If none are stored, or if
+    the stored session has expired, raises PermissionError — the caller should
+    ask the student to re-run the /setup flow to refresh their cookies.
+    """
+    url = f"{OMNIVOX_BASE}{path}"
+    cookies_str = await get_omnivox_cookies(user_id)
+
+    if not cookies_str:
+        raise PermissionError(
+            f"No Omnivox session found for user '{user_id}'. "
+            "Please visit the setup page to connect your Omnivox account."
+        )
+
+    headers = kwargs.pop("headers", {})
+    headers["Cookie"] = cookies_str
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.request(
+            method, url, headers=headers, follow_redirects=True, **kwargs
+        )
+
+    if _is_auth_failure(resp):
+        raise PermissionError(
+            f"Omnivox session expired for user '{user_id}'. "
+            "Please re-authenticate by visiting the setup page."
+        )
+
+    return resp

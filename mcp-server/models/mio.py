@@ -99,7 +99,8 @@ def _load_config() -> MioConfig:
         or _category_from_url(list_url)
         or DEFAULT_MIO_CATEGORY,
         list_selector=_optional_env(MIO_LIST_SELECTOR_ENV) or DEFAULT_LIST_SELECTOR,
-        sender_selector=_optional_env(MIO_SENDER_SELECTOR_ENV) or DEFAULT_SENDER_SELECTOR,
+        sender_selector=_optional_env(MIO_SENDER_SELECTOR_ENV)
+        or DEFAULT_SENDER_SELECTOR,
         title_selector=_optional_env(MIO_TITLE_SELECTOR_ENV) or DEFAULT_TITLE_SELECTOR,
         date_selector=_optional_env(MIO_DATE_SELECTOR_ENV) or DEFAULT_DATE_SELECTOR,
         content_selector=_optional_env(MIO_CONTENT_SELECTOR_ENV)
@@ -242,17 +243,19 @@ def _extract_detail_body(root: Tag | BeautifulSoup, selector: str | None) -> str
     return content
 
 
-async def get_all_mios(req: AllMiosReq) -> AllMiosRes:
+async def get_all_mios(req: AllMiosReq, user_id: str | None = None) -> AllMiosRes:
+    """Return a list of MIO inbox items from the student's Omnivox account."""
     del req
     config = _config_with_runtime_ref(_load_config())
-    html = await _fetch_html(config.list_url, config)
+    html = await _fetch_html(config.list_url, config, user_id=user_id)
     return AllMiosRes(mios=_extract_mios(html, config))
 
 
-async def get_mio(req: MioReq) -> MioRes:
+async def get_mio(req: MioReq, user_id: str | None = None) -> MioRes:
+    """Return the full content of a single MIO message."""
     config = _config_with_runtime_ref(_load_config())
     link = _ensure_ref(req.link)
-    html = await _fetch_html(link, config)
+    html = await _fetch_html(link, config, user_id=user_id)
     soup = BeautifulSoup(html, "html.parser")
 
     title = _first_text(soup, config.title_selector)

@@ -4,7 +4,7 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request as FastAPIRequest
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import default_provider_chat_ready, describe_credentials_gap, load_config
@@ -101,9 +101,8 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/chat", response_model=ChatResponse)
-    async def chat(request: ChatRequest) -> ChatResponse:
+    async def chat(request: ChatRequest, http_request: FastAPIRequest) -> ChatResponse:
         svc = app.state.service
-        # Log the current MODEL_PROVIDER env var and service config
         env_provider = os.getenv("MODEL_PROVIDER", "openai")
         logger.info(f"Chat request received:")
         logger.info(f"  MODEL_PROVIDER env: {env_provider}")
@@ -120,8 +119,13 @@ def create_app() -> FastAPI:
         if gap:
             raise HTTPException(status_code=428, detail=gap)
 
+        bearer_token: str | None = None
+        auth_header = http_request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            bearer_token = auth_header[len("Bearer "):]
+
         try:
-            return await svc.chat(request)
+            return await svc.chat(request, bearer_token=bearer_token)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
