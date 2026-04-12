@@ -1,17 +1,22 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Build the Omniclaw Windows installer end-to-end.
 
 .DESCRIPTION
-    1. Builds the React frontend (npm)
-    2. Copies the build output into mcp-server/static/
-    3. Bundles the Python backend with PyInstaller
-    4. (Optional) Downloads the Ollama installer for bundling
-    5. Compiles the Inno Setup installer
+    1. Installs / syncs dependencies for all three services (uv sync)
+    2. Builds the React frontend (npm)
+    3. Copies the build output into mcp-server/static/
+    4. Installs the combined Python dependency set for PyInstaller
+    5. Bundles the full stack with PyInstaller (MCP + orchestrator + Discord bot)
+    6. (Optional) Downloads the Ollama installer for bundling
+    7. Compiles the Inno Setup installer
 
 .PARAMETER SkipFrontend
     Skip the npm build step (use existing static/ folder).
+
+.PARAMETER SkipSync
+    Skip running `uv sync` for the three services.
 
 .PARAMETER SkipOllamaDownload
     Skip downloading the Ollama installer to bundle in the setup.
@@ -21,21 +26,45 @@
 #>
 param(
     [switch]$SkipFrontend,
+    [switch]$SkipSync,
     [switch]$SkipOllamaDownload,
     [string]$InnoSetupPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 )
 
 $ErrorActionPreference = "Stop"
 
-$Root       = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$Frontend   = Join-Path $Root "frontend"
-$Server     = Join-Path $Root "mcp-server"
-$StaticDest = Join-Path $Server "static"
-$Installer  = Join-Path $Root "installer"
+$Root         = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$Frontend     = Join-Path $Root "frontend"
+$Server       = Join-Path $Root "mcp-server"
+$Orchestrator = Join-Path $Root "orchestrator"
+$DiscordBot   = Join-Path $Root "discord-bot"
+$StaticDest   = Join-Path $Server "static"
+$Installer    = Join-Path $Root "installer"
 
 function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 
-# ── 1. Build frontend ────────────────────────────────────────────────────────
+# ── 1. Sync all services ────────────────────────────────────────────────────
+
+if (-not $SkipSync) {
+    foreach ($svc in @(
+        @{ Name = "mcp-server";   Path = $Server },
+        @{ Name = "orchestrator"; Path = $Orchestrator },
+        @{ Name = "discord-bot";  Path = $DiscordBot }
+    )) {
+        Write-Step "uv sync — $($svc.Name)"
+        Push-Location $svc.Path
+        try {
+            uv sync
+            if ($LASTEXITCODE -ne 0) { throw "uv sync failed for $($svc.Name)" }
+        } finally {
+            Pop-Location
+        }
+    }
+} else {
+    Write-Host "Skipping uv sync (--SkipSync)" -ForegroundColor Yellow
+}
+
+# ── 2. Build frontend ───────────────────────────────────────────────────────
 
 if (-not $SkipFrontend) {
     Write-Step "Building React frontend"
@@ -65,20 +94,39 @@ if (-not $SkipFrontend) {
     }
 }
 
-# ── 2. PyInstaller bundle ────────────────────────────────────────────────────
+# ── 3. Install combined Python deps for PyInstaller ─────────────────────────
 
-Write-Step "Bundling with PyInstaller"
+Write-Step "Installing Python dependencies for PyInstaller"
 Push-Location $Server
 try {
-    $VenvPython = Join-Path $Server ".venv\Scripts\python.exe"
-    if (-not (Test-Path $VenvPython)) {
-        throw "Virtual environment not found at $VenvPython. Run 'uv sync' inside mcp-server/ first."
-    }
+    python -m pip install --quiet pyinstaller
 
-    & $VenvPython -m pip install pyinstaller --quiet
-    if ($LASTEXITCODE -ne 0) { throw "pip install pyinstaller failed" }
+    # Combined deps from mcp-server + orchestrator + discord-bot so
+    # PyInstaller's collect_all can find every package.
+    python -m pip install --quiet `
+        beautifulsoup4 `
+        fastmcp `
+        httpx `
+        "mcp[cli]" `
+        fastapi `
+        "uvicorn[standard]" `
+        google-genai `
+        python-dotenv `
+        pydantic `
+        "discord.py" `
+        aiohttp
 
-    & $VenvPython -m PyInstaller omniclaw.spec --noconfirm --clean
+    if ($LASTEXITCODE -ne 0) { throw "pip install of combined deps failed" }
+} finally {
+    Pop-Location
+}
+
+# ── 4. PyInstaller bundle ───────────────────────────────────────────────────
+
+Write-Step "Bundling with PyInstaller (MCP + orchestrator + Discord bot)"
+Push-Location $Server
+try {
+    python -m PyInstaller omniclaw.spec --noconfirm --clean
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
 } finally {
     Pop-Location
@@ -90,7 +138,7 @@ if (-not (Test-Path $DistDir)) {
 }
 Write-Host "PyInstaller bundle ready at $DistDir" -ForegroundColor Green
 
-# ── 3. Download Ollama installer (optional) ──────────────────────────────────
+# ── 5. Download Ollama installer (optional) ─────────────────────────────────
 
 $OllamaSetup = Join-Path $Installer "OllamaSetup.exe"
 if (-not $SkipOllamaDownload) {
@@ -107,7 +155,7 @@ if (-not $SkipOllamaDownload) {
     Write-Host "Skipping Ollama download (--SkipOllamaDownload)" -ForegroundColor Yellow
 }
 
-# ── 4. Compile Inno Setup installer ──────────────────────────────────────────
+# ── 6. Compile Inno Setup installer ─────────────────────────────────────────
 
 Write-Step "Compiling Inno Setup installer"
 
