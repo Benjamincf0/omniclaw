@@ -89,8 +89,25 @@ class OmniclawDiscordBot(discord.Client):
 
     def _register_commands(self) -> None:
         @self.tree.command(name="ask", description="Ask Omniclaw a question")
-        @app_commands.describe(prompt="What you want Omniclaw to help with")
-        async def ask(interaction: discord.Interaction, prompt: str) -> None:
+        @app_commands.describe(
+            prompt="What you want Omniclaw to help with",
+            provider="Optional model provider override",
+            model="Optional model override for the selected provider",
+        )
+        @app_commands.choices(
+            provider=[
+                app_commands.Choice(name="OpenAI", value="openai"),
+                app_commands.Choice(name="Ollama", value="ollama"),
+                app_commands.Choice(name="Claude", value="claude"),
+                app_commands.Choice(name="Gemini", value="gemini"),
+            ]
+        )
+        async def ask(
+            interaction: discord.Interaction,
+            prompt: str,
+            provider: app_commands.Choice[str] | None = None,
+            model: str | None = None,
+        ) -> None:
             await interaction.response.defer(thinking=True)
             try:
                 reply = await self._fetch_reply(
@@ -98,6 +115,8 @@ class OmniclawDiscordBot(discord.Client):
                     user_id=str(interaction.user.id),
                     user_name=interaction.user.display_name,
                     prompt=prompt,
+                    provider=provider.value if provider else None,
+                    model=model,
                 )
             except Exception as exc:
                 reply = f"Orchestrator error: {exc}"
@@ -129,9 +148,16 @@ class OmniclawDiscordBot(discord.Client):
                 if not isinstance(mcp_servers, list):
                     mcp_servers = []
                 servers = ", ".join(str(server) for server in mcp_servers) or "none"
+                providers = payload.get("available_providers", [])
+                if not isinstance(providers, list):
+                    providers = []
+                provider_text = ", ".join(str(provider) for provider in providers) or "none"
                 reply = (
                     "Bot is up.\n"
                     f"Orchestrator status: {payload.get('status', 'unknown')}\n"
+                    f"Default model: {payload.get('default_provider', 'unknown')}/"
+                    f"{payload.get('default_model', 'unknown')}\n"
+                    f"Available providers: {provider_text}\n"
                     f"MCP servers: {servers}"
                 )
             except Exception as exc:
@@ -144,6 +170,7 @@ class OmniclawDiscordBot(discord.Client):
             reply = (
                 "Available commands:\n"
                 "/ask <prompt> to talk to Omniclaw in this channel.\n"
+                "/ask <prompt> provider:<provider> model:<model> to override the model.\n"
                 "/reset to clear your current channel session.\n"
                 "/status to check bot and orchestrator connectivity.\n"
                 "/help to show this message.\n\n"
@@ -179,12 +206,16 @@ class OmniclawDiscordBot(discord.Client):
         user_id: str,
         user_name: str,
         prompt: str,
+        provider: str | None = None,
+        model: str | None = None,
     ) -> str:
         payload = await self._orchestrator.chat(
             session_id=session_id,
             user_id=user_id,
             user_name=user_name,
             message=prompt,
+            provider=provider,
+            model=model,
         )
         reply = str(payload.get("reply", "")).strip()
         if not reply:

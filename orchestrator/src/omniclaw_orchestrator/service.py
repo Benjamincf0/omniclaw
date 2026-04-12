@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from .config import AppConfig
 from .contracts import ChatRequest, ChatResponse, ToolCallRecord
-from .llm import OpenAICompatibleChatClient
+from .llm import ModelClientRegistry, ResolvedChatClient
 from .mcp_client import MultiServerMcpClient
 
 
@@ -29,30 +29,40 @@ class SessionStore:
 @dataclass(slots=True)
 class ChatService:
     config: AppConfig
-    llm_client: OpenAICompatibleChatClient
+    llm_registry: Any
     mcp_client_factory: Callable[[], MultiServerMcpClient]
     sessions: SessionStore
 
     @classmethod
     def from_config(cls, config: AppConfig) -> ChatService:
-        llm_client = OpenAICompatibleChatClient(
-            api_key=config.openai_api_key,
-            base_url=config.openai_base_url,
-            model=config.openai_model,
-            temperature=config.openai_temperature,
+        llm_registry = ModelClientRegistry(
+            default_provider=config.default_model_provider,
+            provider_configs=config.model_providers,
         )
         return cls(
             config=config,
-            llm_client=llm_client,
+            llm_registry=llm_registry,
             mcp_client_factory=lambda: MultiServerMcpClient(config.mcp_servers),
             sessions=SessionStore(config.history_limit),
         )
+
+    @property
+    def default_provider(self) -> str:
+        return self.llm_registry.default_provider
+
+    @property
+    def default_model(self) -> str:
+        return self.llm_registry.default_model()
+
+    def available_providers(self) -> list[str]:
+        return self.llm_registry.available_providers()
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         message_text = request.message.strip()
         if not message_text:
             raise ValueError("message must not be empty")
 
+        selected_client = self._resolve_llm_client(request)
         session_id = request.session_id or f"session-{uuid4()}"
         if request.clear_history:
             self.sessions.clear(session_id)
@@ -67,10 +77,10 @@ class ChatService:
         tool_call_records: list[ToolCallRecord] = []
 
         async with self.mcp_client_factory() as mcp_client:
-            tools = await mcp_client.get_openai_tools()
+            tools = await mcp_client.list_tools()
 
             for _ in range(self.config.max_tool_rounds):
-                completion = await self.llm_client.complete(
+                completion = await selected_client.client.complete(
                     messages=conversation,
                     tools=tools,
                 )
@@ -107,6 +117,8 @@ class ChatService:
                 return ChatResponse(
                     session_id=session_id,
                     reply=reply,
+                    provider=selected_client.provider,
+                    model=selected_client.model,
                     tool_calls=tool_call_records,
                 )
 
@@ -114,6 +126,12 @@ class ChatService:
 
     def clear_session(self, session_id: str) -> None:
         self.sessions.clear(session_id)
+
+    def _resolve_llm_client(self, request: ChatRequest) -> ResolvedChatClient:
+        return self.llm_registry.resolve(
+            provider=request.provider,
+            model=request.model,
+        )
 
     def _build_user_message(
         self, request: ChatRequest, message_text: str
