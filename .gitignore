@@ -13,5 +13,4 @@ wheels/
 # Local credentials and auth artifacts
 auth.txt
 
-mcp-server/.env
-
+.env*

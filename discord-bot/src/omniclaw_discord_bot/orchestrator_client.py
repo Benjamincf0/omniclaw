@@ -15,6 +15,10 @@ class OrchestratorClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    async def health(self) -> dict[str, Any]:
+        response = await self._client.get("/health")
+        return self._decode_json_dict(response)
+
     async def chat(
         self,
         *,
@@ -32,6 +36,13 @@ class OrchestratorClient:
                 "message": message,
             },
         )
+        return self._decode_json_dict(response)
+
+    async def clear_session(self, session_id: str) -> dict[str, Any]:
+        response = await self._client.delete(f"/sessions/{session_id}")
+        return self._decode_json_dict(response)
+
+    def _decode_json_dict(self, response: httpx.Response) -> dict[str, Any]:
         if response.status_code >= 400:
             raise RuntimeError(
                 f"Orchestrator request failed with {response.status_code}: {response.text}"
