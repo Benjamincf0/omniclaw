@@ -9,6 +9,7 @@ import WelcomeScreen from "./components/WelcomeScreen"
 import HowToUse from "./components/HowToUse"
 import GlancePanel from "./components/GlancePanel"
 import ConsentScreen from "./components/ConsentScreen"
+import SettingsModal from "./components/SettingsModal"
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080"
 
@@ -29,6 +30,7 @@ export default function App() {
   const [showConsent, setShowConsent] = useState(false)
   const [messages, setMessages] = useState([])
   const [isTyping, setIsTyping] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const bottomRef = useRef(null)
 
   const hasMessages = messages.length > 0
@@ -93,20 +95,18 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-textured-parchment">
+      {/* Left sidebar */}
+      <Sidebar activePage={page} onNavigate={setPage} consent={consent} onOpenConsent={openConsent} />
 
-  <Sidebar activePage={page} onNavigate={setPage} consent={consent} onOpenConsent={openConsent} />
+      {/* Main content area - chat takes available space, glance panel on right */}
+      <div className="flex flex-1 overflow-hidden">
 
-      <div className="flex flex-1 items-stretch overflow-hidden bg-textured-parchment">
-
-        {/* Left spacer — keeps chat card centered */}
-        <div className="flex-1" />
-
-        {/* Fixed-width content card */}
-        <div className="flex flex-col h-full shrink-0" style={{ width: "640px" }}>
+        {/* Chat content - flexible width */}
+        <div className="flex flex-col flex-1 min-w-0 h-full">
 
           {page === "chat" && (
             <>
-              <Header />
+              <Header onSettingsClick={() => setShowSettings(true)} />
               <div
                 className="flex-1 overflow-y-auto py-4 bg-textured-warm"
               >
@@ -130,12 +130,13 @@ export default function App() {
 
         </div>
 
-        {/* Right panel — always visible */}
-        <div className="flex-1 flex justify-start">
-          <GlancePanel />
-        </div>
+        {/* Right panel — fixed width */}
+        <GlancePanel />
 
       </div>
+
+      {/* Settings modal */}
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
 
       {/* Consent modal - shown when user hasn't accepted or on-demand from sidebar */}
       {showConsent && <ConsentScreen onAccept={handleAcceptConsent} />}

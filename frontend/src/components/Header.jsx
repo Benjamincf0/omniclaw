@@ -1,4 +1,6 @@
-export default function Header() {
+import { Settings } from "lucide-react"
+
+export default function Header({ onSettingsClick }) {
   return (
     <header
       className="flex items-center justify-between px-6 py-4 shrink-0"
@@ -26,9 +28,20 @@ export default function Header() {
         </p>
       </div>
 
-    
-        
-
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          Live
+        </div>
+        <button
+          onClick={onSettingsClick}
+          className="transition-colors cursor-pointer"
+          style={{ color: "var(--text-muted)" }}
+          title="Settings"
+        >
+          <Settings size={16} />
+        </button>
+      </div>
     </header>
   )
 }
