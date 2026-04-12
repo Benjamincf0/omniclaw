@@ -254,7 +254,7 @@ async def run_chat(message: str, history: list[dict]) -> str:
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 mcp_http_app = mcp.http_app(
-    path=MCP_TRANSPORT_PATH,
+    path="/",
     transport="streamable-http",
 )
 
@@ -305,8 +305,7 @@ async def health():
     }
 
 
-app.mount("/", mcp_http_app)
-
+app.mount(MCP_TRANSPORT_PATH, mcp_http_app)
 
 # ── Static frontend serving ──────────────────────────────────────────────────
 
