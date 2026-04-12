@@ -13,11 +13,15 @@ from omniclaw_orchestrator.service import ChatService, SessionStore
 @dataclass
 class _FakeLlmClient:
     responses: list[ChatCompletionResult]
+    last_messages: list[dict[str, Any]] | None = None
+    last_tools: list[ExposedTool] | None = None
 
     async def complete(
         self, *, messages: list[dict[str, Any]], tools: list[ExposedTool]
     ) -> ChatCompletionResult:
         assert tools
+        self.last_messages = messages
+        self.last_tools = tools
         return self.responses.pop(0)
 
 
@@ -208,3 +212,58 @@ async def test_chat_service_allows_request_level_provider_and_model_override() -
     assert response.reply == "Gemini reply."
     assert response.provider == "gemini"
     assert response.model == "gemini-2.5-pro"
+
+
+async def test_chat_service_adds_orchestration_guidance_to_system_messages() -> None:
+    llm = _FakeLlmClient(
+        responses=[
+            ChatCompletionResult(
+                assistant_message={"role": "assistant", "content": "Assignments reply."},
+                text="Assignments reply.",
+                tool_calls=[],
+            )
+        ]
+    )
+
+    class _AssignmentsMcpClient(_FakeMcpClient):
+        async def list_tools(self) -> list[ExposedTool]:
+            return [
+                ExposedTool(
+                    name="get_lea_classes",
+                    description="Get classes",
+                    input_schema={"type": "object", "properties": {}},
+                    server_name="omnivox",
+                    remote_name="get_lea_classes",
+                ),
+                ExposedTool(
+                    name="get_lea_assignments",
+                    description="Get assignments",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"link": {"type": "string"}},
+                    },
+                    server_name="omnivox",
+                    remote_name="get_lea_assignments",
+                ),
+            ]
+
+    service = ChatService(
+        config=_config(),
+        llm_registry=_FakeLlmRegistry(provider="openai", model="gpt-5.4-mini", client=llm),
+        mcp_client_factory=lambda: _AssignmentsMcpClient(),
+        sessions=SessionStore(max_messages=12),
+    )
+
+    response = await service.chat(
+        ChatRequest(session_id="session-3", message="What are all my assignments?")
+    )
+
+    assert response.reply == "Assignments reply."
+    assert llm.last_messages is not None
+    system_messages = [
+        str(message["content"])
+        for message in llm.last_messages
+        if message.get("role") == "system"
+    ]
+    assert any("Infer and execute prerequisite tool calls yourself" in msg for msg in system_messages)
+    assert any("LEA assignments workflow: call get_lea_classes first" in msg for msg in system_messages)
