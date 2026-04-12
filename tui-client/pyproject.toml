@@ -1,0 +1,17 @@
+[project]
+name = "omniclaw-tui"
+version = "0.1.0"
+description = "Terminal UI client for the Omniclaw orchestrator"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+omniclaw-tui = "omniclaw_tui.main:main"
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/omniclaw_tui"]
