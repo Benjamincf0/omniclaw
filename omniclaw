@@ -48,6 +48,10 @@ SERVICES = (
     ),
 )
 
+SYNC_SERVICES = SERVICES + (
+    Service("tui", ROOT / "tui-client", ("uv", "run", "omniclaw-tui")),
+)
+
 
 def load_env_file(path: Path) -> None:
     if not path.exists():
@@ -127,7 +131,7 @@ def validate_env(env: dict[str, str]) -> list[str]:
 
 
 def run_sync(env: dict[str, str]) -> int:
-    for service in SERVICES:
+    for service in SYNC_SERVICES:
         print(f"[sync] {service.name}: uv sync")
         result = subprocess.run(
             ("uv", "sync", "--no-editable"),
@@ -256,6 +260,22 @@ def run_up(env: dict[str, str], *, do_sync: bool) -> int:
     return exit_code
 
 
+def run_tui(env: dict[str, str], *, do_sync: bool) -> int:
+    service = Service("tui", ROOT / "tui-client", ("uv", "run", "omniclaw-tui"))
+    if do_sync:
+        print("[sync] tui: uv sync")
+        result = subprocess.run(
+            ("uv", "sync", "--no-editable"),
+            cwd=service.cwd,
+            env=env,
+            check=False,
+        )
+        if result.returncode != 0:
+            return result.returncode
+
+    return subprocess.call(service.command, cwd=service.cwd, env=env)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="omniclaw",
@@ -278,6 +298,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("sync", help="Install or update dependencies for all services.")
     subparsers.add_parser("env", help="Print the derived local service URLs.")
+    tui = subparsers.add_parser("tui", help="Launch the terminal UI client.")
+    tui.add_argument(
+        "--no-sync",
+        action="store_true",
+        help="Skip `uv sync` before starting the TUI client.",
+    )
 
     return parser
 
@@ -300,6 +326,8 @@ def main() -> int:
         print(f"MCP_SERVER_URLS={env['MCP_SERVER_URLS']}")
         print(f"ORCHESTRATOR_URL={env['ORCHESTRATOR_URL']}")
         return 0
+    if command == "tui":
+        return run_tui(env, do_sync=not args.no_sync)
     return run_up(env, do_sync=not args.no_sync)
 
 
