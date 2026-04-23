@@ -21,7 +21,12 @@ The intended request flow is:
 
 ## Quick start
 
-The easiest way to run the full stack on one server is from the repo root:
+2 ways to run the full stack on one server:
+
+1) Using installers:
+Check out the releases
+
+2) Using root repo:
 
 ```bash
 cp .env.example .env
