@@ -130,5 +130,4 @@ Each folder still has its own `README.md` if you want to run a single service by
   ```
 
   ## 🎥 Demo
-  https://www.youtube.com/watch?v=bILXbqu0I_Q
 [![Demo](https://img.youtube.com/vi/bILXbqu0I_Q/0.jpg)](https://youtu.be/bILXbqu0I_Q)
