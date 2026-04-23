@@ -7,9 +7,26 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request as FastAPIRequest
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import load_config
+from .config import default_provider_chat_ready, describe_credentials_gap, load_config
 from .contracts import ChatRequest, ChatResponse, HealthResponse
 from .service import ChatService
+
+
+def _allow_missing_credentials() -> bool:
+    return os.getenv("OMNICLAW_START_WITHOUT_API_KEYS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _orchestrator_env_file() -> str:
+    path = os.getenv("OMNICLAW_ENV_FILE", "").strip()
+    if path:
+        return path
+    return os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+    )
 
 # Configure logging
 logging.basicConfig(
@@ -22,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 def create_app() -> FastAPI:
     # Store config and service in app.state so we can reload them
-    config = load_config()
+    config = load_config(allow_missing_credentials=_allow_missing_credentials())
     service = ChatService.from_config(config)
 
     app = FastAPI(title="Omniclaw Orchestrator", version="0.1.0")
@@ -40,26 +57,32 @@ def create_app() -> FastAPI:
     async def health() -> HealthResponse:
         svc = app.state.service
         cfg = app.state.config
+        chat_ready, gap = default_provider_chat_ready(
+            cfg.default_model_provider, cfg.model_providers
+        )
         return HealthResponse(
             status="ok",
             mcp_servers=[server.name for server in cfg.mcp_servers],
             default_provider=svc.default_provider,
             default_model=svc.default_model,
             available_providers=svc.available_providers(),
+            chat_ready=chat_ready,
+            setup_message=gap["message"] if gap else None,
         )
 
     @app.post("/reload")
     async def reload_config() -> dict[str, str]:
         """Reload configuration from .env file without restarting the server."""
-        # Find and reload the .env file
-        env_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
-        load_dotenv(env_path, override=True)
-        
+        env_path = _orchestrator_env_file()
+        if os.path.isfile(env_path):
+            load_dotenv(env_path, override=True)
+
         old_provider = app.state.service.default_provider
         old_model = app.state.service.default_model
-        
-        # Reload config and rebuild service
-        app.state.config = load_config()
+
+        app.state.config = load_config(
+            allow_missing_credentials=_allow_missing_credentials()
+        )
         app.state.service = ChatService.from_config(app.state.config)
         
         new_provider = app.state.service.default_provider
@@ -87,6 +110,14 @@ def create_app() -> FastAPI:
         logger.info(f"  Service default model: {svc.default_model}")
         logger.info(f"  Request provider: {request.provider or '(use default)'}")
         logger.info(f"  Request model: {request.model or '(use default)'}")
+        gap = describe_credentials_gap(
+            default_provider=app.state.config.default_model_provider,
+            model_providers=app.state.config.model_providers,
+            request_provider=request.provider,
+            request_model=request.model,
+        )
+        if gap:
+            raise HTTPException(status_code=428, detail=gap)
 
         bearer_token: str | None = None
         auth_header = http_request.headers.get("authorization", "")

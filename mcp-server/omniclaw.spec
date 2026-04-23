@@ -6,12 +6,18 @@ Bundles the MCP server, orchestrator, and Discord bot into a single
 executable that mirrors ``./omniclaw up``.
 
 Build with:  pyinstaller omniclaw.spec
-Output:      dist/omniclaw/omniclaw.exe
+Output:      Windows: dist/omniclaw/omniclaw.exe | macOS: dist/Omniclaw.app
 """
 
 import os
 import sys
 from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+# UPX breaks or complicates many macOS bundles and Gatekeeper workflows.
+_USE_UPX = sys.platform != "darwin"
+# macOS does not attach a Terminal when you double-click a .app; console=True
+# looks like "nothing happens". Use a GUI subprocess on Darwin; keep a console on Windows.
+_CONSOLE = sys.platform != "darwin"
 
 
 def _collect(pkg):
@@ -70,25 +76,33 @@ for _pkg in _packages:
     _all_bins   += _b
     _all_imports += _h
 
+try:
+    _spec_root = os.path.dirname(os.path.abspath(SPECPATH))
+except NameError:
+    _spec_root = os.getcwd()
+_optional_secrets = []
+for _fn in ("auth.txt", ".env"):
+    if os.path.isfile(os.path.join(_spec_root, _fn)):
+        _optional_secrets.append((_fn, "."))
+
 a = Analysis(
     ["launcher.py"],
     pathex=[
-        os.path.abspath(os.path.join("..", "orchestrator", "src")),
+        os.path.abspath(os.path.join("..", "orchestrator")),
         os.path.abspath(os.path.join("..", "discord-bot", "src")),
     ],
     binaries=_all_bins,
     datas=[
         ("static", "static"),
         ("models", "models"),
-        ("auth.txt", "."),
-        (".env", "."),
-        (os.path.join("..", "orchestrator", "src", "omniclaw_orchestrator"),
+        (os.path.join("..", "orchestrator", "omniclaw_orchestrator"),
          "omniclaw_orchestrator"),
         (os.path.join("..", "discord-bot", "src", "omniclaw_discord_bot"),
          "omniclaw_discord_bot"),
-    ] + _all_datas + _playwright_driver_datas(),
+    ] + _optional_secrets + _all_datas + _playwright_driver_datas(),
     hiddenimports=[
         # local app modules (not auto-discoverable by static analysis)
+        "config_paths",
         "omni",
         "omnivox_client",
         "auth_manager",
@@ -142,8 +156,8 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    console=True,
+    upx=_USE_UPX,
+    console=_CONSOLE,
     icon=None,
 )
 
@@ -152,7 +166,27 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=_USE_UPX,
     upx_exclude=[],
     name="omniclaw",
 )
+
+# A real macOS .app must use PyInstaller's BUNDLE so libpython and dylibs land in
+# Contents/Frameworks. Copying the onedir tree into Contents/MacOS/ breaks the
+# bootloader (it looks for ../Frameworks/libpython*.dylib).
+if sys.platform == "darwin":
+    from PyInstaller.building.osx import BUNDLE
+
+    app = BUNDLE(
+        coll,
+        name="Omniclaw.app",
+        icon=None,
+        bundle_identifier="com.omniclaw.app",
+        version="0.1.0",
+        info_plist={
+            "CFBundleName": "Omniclaw",
+            "CFBundleDisplayName": "Omniclaw",
+            "CFBundleVersion": "0.1.0",
+            "LSMinimumSystemVersion": "12.0",
+        },
+    )

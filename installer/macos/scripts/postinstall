@@ -1,0 +1,67 @@
+#!/bin/bash
+# Post-install: optional Ollama from bundled DMG, Playwright Chromium for the console user,
+# then launch Omniclaw (same idea as Inno's "Launch Omniclaw" on the finish page).
+# Must exit 0 so the install is not rolled back when optional steps fail.
+
+APP="/Applications/Omniclaw.app"
+RES="${APP}/Contents/Resources"
+
+# User at the graphical login session (postinstall runs as root).
+CONSOLE_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+
+install_ollama_from_dmg() {
+	local dmg="${RES}/Ollama.dmg"
+	[[ -f "$dmg" ]] || return 0
+	[[ -d "/Applications/Ollama.app" ]] && return 0
+
+	local mnt
+	mnt="$(mktemp -d /tmp/omniclaw.ollama.XXXXXX)"
+	hdiutil attach "$dmg" -mountpoint "$mnt" -nobrowse -quiet 2>/dev/null || {
+		rmdir "$mnt" 2>/dev/null || true
+		return 0
+	}
+	if [[ -d "$mnt/Ollama.app" ]]; then
+		ditto "$mnt/Ollama.app" "/Applications/Ollama.app" 2>/dev/null || true
+	fi
+	hdiutil detach "$mnt" -quiet 2>/dev/null || true
+	rmdir "$mnt" 2>/dev/null || true
+}
+
+install_ollama_from_dmg
+
+if [[ ! -d "/Applications/Ollama.app" ]]; then
+	osascript -e 'display dialog "Omniclaw uses Ollama for local AI models. If Ollama is not installed yet, download it from https://ollama.com/download" buttons {"OK"} default button "OK" with title "Omniclaw"' 2>/dev/null || true
+fi
+
+# PyInstaller BUNDLE splits the onedir layout across MacOS/Frameworks/Resources with symlinks.
+# Install Chromium into Application Support (same PLAYWRIGHT_BROWSERS_PATH the frozen app sets).
+NODE="$(find "$APP/Contents" -path '*/playwright/driver/node' 2>/dev/null | head -1)"
+CLI="$(find "$APP/Contents" -path '*/playwright/driver/package/cli.js' 2>/dev/null | head -1)"
+if [[ -n "$NODE" && -x "$NODE" && -f "$CLI" ]]; then
+	if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" && "$CONSOLE_USER" != "loginwindow" ]]; then
+		UHOME="$(eval echo "~${CONSOLE_USER}" 2>/dev/null || true)"
+		if [[ -n "$UHOME" && -d "$UHOME" ]]; then
+			PW_DIR="${UHOME}/Library/Application Support/Omniclaw/ms-playwright"
+			LOG="${UHOME}/Library/Application Support/Omniclaw/playwright-install.log"
+			# Run as the console user so ~/Library paths and the log file are user-owned.
+			sudo -u "$CONSOLE_USER" env \
+				HOME="$UHOME" \
+				INS_NODE="$NODE" \
+				INS_CLI="$CLI" \
+				INS_PW="$PW_DIR" \
+				INS_LOG="$LOG" \
+				bash -c '
+				set +e
+				mkdir -p "$INS_PW" "$(dirname "$INS_LOG")"
+				export PLAYWRIGHT_BROWSERS_PATH="$INS_PW"
+				"$INS_NODE" "$INS_CLI" install chromium >>"$INS_LOG" 2>&1
+				' || true
+		fi
+	fi
+fi
+
+if [[ -d "$APP" && -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" && "$CONSOLE_USER" != "loginwindow" ]]; then
+	sudo -u "$CONSOLE_USER" open "$APP" 2>/dev/null || true
+fi
+
+exit 0

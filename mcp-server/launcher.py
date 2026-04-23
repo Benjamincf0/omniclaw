@@ -18,6 +18,8 @@ import time
 import webbrowser
 from pathlib import Path
 
+from config_paths import playwright_browsers_dir, user_config_file
+
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 8000
 ORCHESTRATOR_HOST = "127.0.0.1"
@@ -34,10 +36,8 @@ def _base_dir() -> Path:
 
 
 def _user_config_path() -> Path:
-    """Writable config file next to the executable (written by the Settings UI)."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "omniclaw.env"
-    return Path(__file__).resolve().parent / "omniclaw.env"
+    """Writable env file (Application Support when frozen, repo .env when dev)."""
+    return user_config_file()
 
 
 def _load_env_file(env_file: Path, *, override: bool = False) -> None:
@@ -65,7 +65,10 @@ def _load_env_file(env_file: Path, *, override: bool = False) -> None:
 
 def _load_env() -> None:
     _load_env_file(_user_config_path(), override=True)
-    _load_env_file(_base_dir() / ".env")
+    if getattr(sys, "frozen", False):
+        legacy = Path(sys.executable).parent / "omniclaw.env"
+        _load_env_file(legacy, override=False)
+    _load_env_file(_base_dir() / ".env", override=False)
 
 
 def _set_defaults() -> None:
@@ -74,6 +77,17 @@ def _set_defaults() -> None:
     os.environ.setdefault("MCP_TRANSPORT_PATH", "/mcp")
     os.environ.setdefault("ORCHESTRATOR_HOST", ORCHESTRATOR_HOST)
     os.environ.setdefault("ORCHESTRATOR_PORT", str(ORCHESTRATOR_PORT))
+    os.environ.setdefault("OMNICLAW_ENV_FILE", str(_user_config_path()))
+    if getattr(sys, "frozen", False):
+        os.environ.setdefault("OMNICLAW_START_WITHOUT_API_KEYS", "1")
+        # Playwright defaults to ~/Library/Caches; use Application Support so
+        # postinstall and first-run auth share the same Chromium install.
+        try:
+            pb = playwright_browsers_dir()
+            pb.mkdir(parents=True, exist_ok=True)
+            os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(pb))
+        except OSError:
+            pass
 
     if not os.environ.get("ORCHESTRATOR_URL", "").strip():
         port = os.environ["ORCHESTRATOR_PORT"]
@@ -108,6 +122,15 @@ def _find_ollama() -> str | None:
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
         os.path.expandvars(r"%PROGRAMFILES%\Ollama\ollama.exe"),
     ]
+    if sys.platform == "darwin":
+        common_paths.extend(
+            [
+                "/Applications/Ollama.app/Contents/Resources/ollama",
+                os.path.expanduser(
+                    "~/Applications/Ollama.app/Contents/Resources/ollama"
+                ),
+            ]
+        )
     for p in common_paths:
         if os.path.isfile(p):
             return p
@@ -156,10 +179,9 @@ def _run_orchestrator() -> None:
     try:
         import uvicorn
         from omniclaw_orchestrator.server import app as orch_app
-        from omniclaw_orchestrator.config import load_config
 
-        config = load_config()
-        uvicorn.run(orch_app, host=config.host, port=config.port, reload=False)
+        cfg = orch_app.state.config
+        uvicorn.run(orch_app, host=cfg.host, port=cfg.port, reload=False)
     except ValueError as exc:
         print(f"[launcher] Orchestrator skipped (config incomplete): {exc}")
     except Exception as exc:

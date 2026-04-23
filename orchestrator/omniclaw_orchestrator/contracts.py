@@ -34,3 +34,5 @@ class HealthResponse(BaseModel):
     default_provider: str
     default_model: str
     available_providers: list[str]
+    chat_ready: bool = True
+    setup_message: str | None = None

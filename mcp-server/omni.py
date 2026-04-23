@@ -77,6 +77,8 @@ from models.lea_details import get_lea_announcement as fetch_lea_announcement
 from models.lea_details import get_lea_assignments as fetch_lea_assignments
 from models.lea_details import get_lea_documents as fetch_lea_documents
 from models.lea_details import get_lea_grades as fetch_lea_grades
+from auth_manager import load_auth
+from config_paths import user_config_file
 from models.mio import AllMiosReq, AllMiosRes, MioReq, MioRes
 from models.mio import get_all_mios as _get_all_mios
 from models.mio import get_mio as _get_mio_detail
@@ -934,11 +936,8 @@ _CORS_MIDDLEWARE = [
 # ── Settings API ─────────────────────────────────────────────────────────────
 
 def _config_path() -> Path:
-    """Writable config file in project root (shared with orchestrator)."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "omniclaw.env"
-    # Go up from mcp-server/omni.py to project root
-    return Path(__file__).resolve().parent.parent / ".env"
+    """Writable config file (see config_paths.user_config_file)."""
+    return user_config_file()
 
 
 def _read_persistent_config() -> dict[str, str]:
@@ -1085,7 +1084,17 @@ async def settings(request: Request) -> Response:
             config.pop(key, None)
             os.environ.pop(key, None)
 
-    _write_persistent_config(config)
+    try:
+        _write_persistent_config(config)
+    except OSError as exc:
+        logger.exception("Failed to write settings to %s", _config_path())
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Cannot write config file ({exc}). "
+                "If you use the desktop app, ensure it can write to Application Support."
+            ),
+        ) from exc
     _get_gemini_client.cache_clear()
 
     orchestrator_url = os.getenv("ORCHESTRATOR_URL", "http://127.0.0.1:8080")

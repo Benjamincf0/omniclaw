@@ -19,6 +19,43 @@ import SetupPage from "./components/SetupPage"
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000"
 const ORCHESTRATOR_URL = import.meta.env.VITE_ORCHESTRATOR_URL ?? "http://localhost:8080"
 
+async function fetchReply(message, history) {
+  const token = await getAccessTokenSilently()
+  const res = await fetch(`${ORCHESTRATOR_URL}/chat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ message: text, session_id: sessionId }),
+  })
+  let data
+  try {
+    data = await res.json()
+  } catch {
+    throw new Error("The server returned an invalid response.")
+  }
+  if (!res.ok) {
+    const d = data?.detail
+    if (
+      typeof d === "object" &&
+      d != null &&
+      (d.code === "NEEDS_API_KEY" || d.code === "NEEDS_MODEL")
+    ) {
+      const err = new Error(
+        d.message || "Open Settings (gear icon) to add your API key or model, then save."
+      )
+      err.setupHint = true
+      err.code = d.code
+      throw err
+    }
+    const detail =
+      typeof d === "string" ? d : (d && typeof d.message === "string" ? d.message : null)
+    throw new Error(detail ?? `Server error ${res.status}`)
+  }
+  return data
+}
+
 // ── Loading spinner (shared) ──────────────────────────────────────────────────
 
 function LoadingDots() {
@@ -77,24 +114,28 @@ function ChatPage() {
     setIsTyping(true)
 
     try {
-      const token = await getAccessTokenSilently()
-      const res = await fetch(`${ORCHESTRATOR_URL}/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ message: text, session_id: sessionId }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail ?? `Server error ${res.status}`)
+      const data = await fetchReply(text, history)
       setSessionId(data.session_id)
       setMessages((prev) => [...prev, { role: "assistant", content: data.reply, timestamp: Date.now() }])
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "Something went wrong. Is the server running?", timestamp: Date.now() },
-      ])
+    } catch (err) {
+      if (err.setupHint) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: err.message, timestamp: Date.now() },
+        ])
+        setShowSettings(true)
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content:
+              err.message?.trim() ||
+              "Something went wrong. Is the server running?",
+            timestamp: Date.now(),
+          },
+        ])
+      }
     } finally {
       setIsTyping(false)
     }

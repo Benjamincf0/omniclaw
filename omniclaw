@@ -75,7 +75,7 @@ def load_env_file(path: Path) -> None:
         os.environ[key] = value
 
 
-def build_runtime_env() -> dict[str, str]:
+def build_runtime_env(*, shared_env_file: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
 
     # Force non-editable installs so uv run doesn't revert to .pth-based editable
@@ -103,6 +103,9 @@ def build_runtime_env() -> dict[str, str]:
         env["MCP_SERVER_URLS"] = (
             f"omnivox=http://127.0.0.1:{env['MCP_PORT'].strip()}{transport_path}/"
         )
+
+    if shared_env_file is not None and shared_env_file.is_file():
+        env.setdefault("OMNICLAW_ENV_FILE", str(shared_env_file.resolve()))
 
     return env
 
@@ -319,7 +322,9 @@ def main() -> int:
         env_path = ROOT / env_path
 
     load_env_file(env_path)
-    env = build_runtime_env()
+    env = build_runtime_env(
+        shared_env_file=env_path if env_path.is_file() else None
+    )
 
     command = args.command or "up"
     if command == "sync":
