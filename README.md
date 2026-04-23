@@ -128,3 +128,7 @@ Each folder still has its own `README.md` if you want to run a single service by
   6. Orchestrator feeds the result back to the LLM
   7. LLM produces a final reply → returned to the browser
   ```
+
+  ## 🎥 Demo
+  https://www.youtube.com/watch?v=bILXbqu0I_Q
+[![Demo](https://img.youtube.com/vi/bILXbqu0I_Q/0.jpg)](https://youtu.be/bILXbqu0I_Q)
