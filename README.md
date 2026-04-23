@@ -21,12 +21,18 @@ The intended request flow is:
 
 ## Quick start
 
-2 ways to run the full stack on one server:
+There are two ways to run OmniClaw depending on whether you want to use the pre-built binaries or run from the source code.
 
-1) Using installers:
-Check out the releases
+#### Option 1: Desktop Installation (Recommended)
 
-2) Using root repo:
+Download the latest version for your operating system from the [`Releases`](https://github.com/Benjamincf0/omniclaw/releases) page.
+
+    Windows: Run the .exe installer.
+    macOS: Open the .pkg file to install.
+    
+    Note: As the app is currently unsigned, you may see a security warning. On Windows, click "More Info" -> "Run Anyway." On macOS, right-click the file and select "Open."
+
+#### Option 2: Run from source:
 
 ```bash
 cp .env.example .env
